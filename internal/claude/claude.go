@@ -1,0 +1,124 @@
+package claude
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log/slog"
+	"os/exec"
+
+	"github.com/jamesreagan/autobacklog/internal/config"
+)
+
+// Client wraps the Claude Code CLI for subprocess invocation.
+type Client struct {
+	cfg    config.ClaudeConfig
+	budget *Budget
+	log    *slog.Logger
+}
+
+// NewClient creates a new Claude CLI client.
+func NewClient(cfg config.ClaudeConfig, log *slog.Logger) *Client {
+	return &Client{
+		cfg:    cfg,
+		budget: NewBudget(cfg.MaxBudgetTotal),
+		log:    log,
+	}
+}
+
+// Budget returns the budget tracker.
+func (c *Client) Budget() *Budget {
+	return c.budget
+}
+
+// Run invokes the Claude CLI with the given prompt in the given working directory.
+// Returns the raw output string and any error.
+func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error) {
+	if !c.budget.CanSpend(c.cfg.MaxBudgetPerCall) {
+		return "", fmt.Errorf("budget exceeded: %s", c.budget.String())
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
+	defer cancel()
+
+	args := []string{
+		"--print",
+		"--output-format", "json",
+		"--model", c.cfg.Model,
+		"--dangerously-skip-permissions",
+		"--max-budget-usd", fmt.Sprintf("%.2f", c.cfg.MaxBudgetPerCall),
+		prompt,
+	}
+
+	c.log.Info("invoking claude", "model", c.cfg.Model, "work_dir", workDir, "budget_remaining", fmt.Sprintf("$%.2f", c.budget.Remaining()))
+
+	cmd := exec.CommandContext(ctx, c.cfg.Binary, args...)
+	cmd.Dir = workDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("claude timed out after %s: %w", c.cfg.Timeout, ctx.Err())
+		}
+		return "", fmt.Errorf("claude failed: %w\nstderr: %s", err, stderr.String())
+	}
+
+	output := stdout.String()
+
+	// Try to extract cost from output and record it
+	resp, parseErr := parseClaudeResponse(output)
+	if parseErr == nil && resp.Cost.Total > 0 {
+		c.budget.Record(resp.Cost.Total)
+		c.log.Info("claude invocation complete", "cost", fmt.Sprintf("$%.4f", resp.Cost.Total), "budget_status", c.budget.String())
+	} else {
+		// Record the max per-call budget as a conservative estimate
+		c.budget.Record(c.cfg.MaxBudgetPerCall)
+		c.log.Warn("could not parse cost from output, recording max budget per call")
+	}
+
+	return output, nil
+}
+
+// RunPrint invokes Claude in print-only mode (no JSON output) for implementation tasks.
+func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, error) {
+	if !c.budget.CanSpend(c.cfg.MaxBudgetPerCall) {
+		return "", fmt.Errorf("budget exceeded: %s", c.budget.String())
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
+	defer cancel()
+
+	args := []string{
+		"--print",
+		"--model", c.cfg.Model,
+		"--dangerously-skip-permissions",
+		"--max-budget-usd", fmt.Sprintf("%.2f", c.cfg.MaxBudgetPerCall),
+		prompt,
+	}
+
+	c.log.Info("invoking claude (print mode)", "model", c.cfg.Model, "work_dir", workDir)
+
+	cmd := exec.CommandContext(ctx, c.cfg.Binary, args...)
+	cmd.Dir = workDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("claude timed out: %w", ctx.Err())
+		}
+		return "", fmt.Errorf("claude failed: %w\nstderr: %s", err, stderr.String())
+	}
+
+	// Conservative budget recording for non-JSON mode
+	c.budget.Record(c.cfg.MaxBudgetPerCall)
+
+	return stdout.String(), nil
+}

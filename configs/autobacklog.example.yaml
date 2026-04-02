@@ -1,0 +1,94 @@
+# =============================================================================
+# Autobacklog Configuration
+# =============================================================================
+# Autonomous code improvement daemon.
+# All ${VAR} references are interpolated from environment variables.
+# See docs/configuration.md for full reference.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Repository
+# -----------------------------------------------------------------------------
+repo:
+  url: "https://github.com/your-org/your-repo.git"
+  branch: "main"
+  work_dir: "/tmp/autobacklog/your-repo"
+  pr_branch_prefix: "autobacklog"
+
+# -----------------------------------------------------------------------------
+# GitHub Authentication
+# Use one of: pat (inline), pat_file (path to file), or GITHUB_TOKEN env var
+# -----------------------------------------------------------------------------
+github:
+  pat: "${GITHUB_TOKEN}"
+  # pat_file: "/home/user/.github-pat"
+
+# -----------------------------------------------------------------------------
+# Claude Code CLI
+# -----------------------------------------------------------------------------
+claude:
+  binary: "claude"                   # path to claude CLI binary
+  model: "sonnet"                    # model to use (sonnet, opus, haiku)
+  max_budget_per_call: 10.00         # USD budget cap per CLI invocation
+  max_budget_total: 100.00           # USD total budget across all invocations
+  timeout: "10m"                     # timeout per invocation
+
+# -----------------------------------------------------------------------------
+# Backlog Management
+# -----------------------------------------------------------------------------
+backlog:
+  high_threshold: 1                  # implement immediately when any high item exists
+  medium_threshold: 3                # batch when 3+ medium items accumulate
+  low_threshold: 5                   # batch when 5+ low items accumulate
+  max_per_cycle: 5                   # max items to implement per cycle
+  stale_days: 30                     # auto-clean terminal items after N days
+
+# -----------------------------------------------------------------------------
+# Testing
+# -----------------------------------------------------------------------------
+testing:
+  auto_detect: true                  # auto-detect test framework
+  # override_command: "npm test"     # uncomment to override auto-detection
+  timeout: "5m"                      # test execution timeout
+  max_retries: 3                     # max fix attempts when tests fail
+
+# -----------------------------------------------------------------------------
+# Execution Mode
+# -----------------------------------------------------------------------------
+mode: "oneshot"                      # "oneshot" (single cycle) or "daemon" (continuous)
+
+# -----------------------------------------------------------------------------
+# Daemon Settings (only used when mode: "daemon")
+# -----------------------------------------------------------------------------
+daemon:
+  interval: "1h"                     # time between cycles
+  # quiet_start: "22:00"            # optional: pause during these hours
+  # quiet_end: "06:00"
+
+# -----------------------------------------------------------------------------
+# Email Notifications
+# -----------------------------------------------------------------------------
+notifications:
+  enabled: false
+  smtp:
+    host: "smtp.example.com"
+    port: 587
+    username: "${SMTP_USERNAME}"
+    password: "${SMTP_PASSWORD}"
+    from: "autobacklog@example.com"
+  recipients:
+    - "dev-team@example.com"
+  events:
+    on_cycle_complete: true
+    on_stuck: true
+    on_out_of_tokens: true
+    on_pr_created: true
+    on_error: true
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  level: "info"                      # debug, info, warn, error
+  # file: "/var/log/autobacklog.log" # optional: also log to file
+  format: "text"                     # text or json

@@ -1,0 +1,4 @@
+autobacklog
+*.db
+*.exe
+.env
