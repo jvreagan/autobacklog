@@ -31,6 +31,20 @@ func (c *Client) Budget() *Budget {
 	return c.budget
 }
 
+// buildArgs constructs the CLI arguments for a Claude invocation.
+// If jsonOutput is true, --output-format json is included for structured responses.
+func (c *Client) buildArgs(prompt string, jsonOutput bool) []string {
+	args := []string{"--print"}
+	if jsonOutput {
+		args = append(args, "--output-format", "json")
+	}
+	args = append(args, "--model", c.cfg.Model, "--max-budget-usd", fmt.Sprintf("%.2f", c.cfg.MaxBudgetPerCall))
+	if c.cfg.DangerouslySkipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	return append(args, prompt)
+}
+
 // Run invokes the Claude CLI with the given prompt in the given working directory.
 // Returns the raw output string and any error.
 func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error) {
@@ -41,14 +55,7 @@ func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 
-	args := []string{
-		"--print",
-		"--output-format", "json",
-		"--model", c.cfg.Model,
-		"--dangerously-skip-permissions",
-		"--max-budget-usd", fmt.Sprintf("%.2f", c.cfg.MaxBudgetPerCall),
-		prompt,
-	}
+	args := c.buildArgs(prompt, true)
 
 	c.log.Info("invoking claude", "model", c.cfg.Model, "work_dir", workDir, "budget_remaining", fmt.Sprintf("$%.2f", c.budget.Remaining()))
 
@@ -92,13 +99,7 @@ func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, 
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 
-	args := []string{
-		"--print",
-		"--model", c.cfg.Model,
-		"--dangerously-skip-permissions",
-		"--max-budget-usd", fmt.Sprintf("%.2f", c.cfg.MaxBudgetPerCall),
-		prompt,
-	}
+	args := c.buildArgs(prompt, false)
 
 	c.log.Info("invoking claude (print mode)", "model", c.cfg.Model, "work_dir", workDir)
 
