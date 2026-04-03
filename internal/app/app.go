@@ -208,7 +208,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	// Mark as in progress
 	item.Status = backlog.StatusInProgress
 	item.Attempts++
-	a.store.Update(ctx, item)
+	if err := a.store.Update(ctx, item); err != nil {
+		return fmt.Errorf("updating item status to in_progress: %w", err)
+	}
 
 	// Check budget
 	if !a.claude.Budget().CanSpend(a.cfg.Claude.MaxBudgetPerCall) {
@@ -241,7 +243,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		a.log.Warn("claude made no changes", "title", item.Title)
 		a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch)
 		item.Status = backlog.StatusSkipped
-		a.store.Update(ctx, item)
+		if err := a.store.Update(ctx, item); err != nil {
+			return fmt.Errorf("updating item status to skipped: %w", err)
+		}
 		return nil
 	}
 
@@ -251,7 +255,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		a.repo.RevertToClean(ctx)
 		a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch)
 		item.Status = backlog.StatusFailed
-		a.store.Update(ctx, item)
+		if updateErr := a.store.Update(ctx, item); updateErr != nil {
+			a.log.Error("failed to update item status to failed", "title", item.Title, "error", updateErr)
+		}
 		a.notifier.Send(notify.StuckNotification(item.Title, item.FilePath, item.Attempts, err.Error()))
 		return err
 	}
@@ -281,7 +287,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 
 	item.Status = backlog.StatusDone
 	item.PRLink = prURL
-	a.store.Update(ctx, item)
+	if err := a.store.Update(ctx, item); err != nil {
+		return fmt.Errorf("updating item status to done: %w", err)
+	}
 	stats.ItemsImplemented++
 	stats.PRsCreated++
 
