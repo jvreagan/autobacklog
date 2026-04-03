@@ -28,6 +28,7 @@ github:
   # Use one of: pat, pat_file, or GITHUB_TOKEN env var
   pat: "${GITHUB_TOKEN}"
   # pat_file: "/path/to/pat-file"
+  auto_merge: false                  # enable to auto-merge PRs after CI passes
 
 claude:
   binary: "claude"

@@ -59,8 +59,10 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	stats := &CycleStats{}
 	state := StateClone
 
+	a.log.Info("starting cycle", "dry_run", a.dryRun, "repo", a.cfg.Repo.URL)
+
 	for state != StateDone {
-		a.log.Info("state transition", "state", state.String())
+		a.log.Info("entering state", "state", state.String(), "action", state.Description())
 
 		var err error
 		switch state {
@@ -75,11 +77,11 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		case StateImplement:
 			err = a.doImplement(ctx, stats)
 		case StateTest:
-			// Tests are run per-item inside doImplement
+			a.log.Info("skipping state (tests run during implementation)", "state", state.String())
 			state = state.Next()
 			continue
 		case StatePR:
-			// PRs are created per-item inside doImplement
+			a.log.Info("skipping state (PRs created during implementation)", "state", state.String())
 			state = state.Next()
 			continue
 		case StateDocument:
@@ -93,13 +95,23 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 			return stats, err
 		}
 
+		a.log.Info("completed state", "state", state.String())
 		state = state.Next()
 	}
 
 	// Clean stale items
+	a.log.Info("cleaning stale backlog items", "stale_days", a.cfg.Backlog.StaleDays)
 	a.manager.CleanStale(ctx, a.cfg.Backlog.StaleDays)
 
 	// Send cycle summary
+	a.log.Info("cycle complete",
+		"items_found", stats.ItemsFound,
+		"items_inserted", stats.ItemsInserted,
+		"items_implemented", stats.ItemsImplemented,
+		"prs_created", stats.PRsCreated,
+		"prs_auto_merged", stats.PRsAutoMerged,
+		"errors", len(stats.Errors),
+	)
 	a.notifier.Send(notify.CycleCompleteNotification(
 		stats.ItemsFound, stats.ItemsImplemented, stats.PRsCreated,
 		a.claude.Budget().String(),
@@ -110,55 +122,70 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 
 func (a *App) doClone(ctx context.Context) error {
 	if a.dryRun {
-		a.log.Info("[dry-run] would clone/pull repo", "url", a.cfg.Repo.URL)
+		a.log.Info("[dry-run] would clone/pull repo", "url", a.cfg.Repo.URL, "branch", a.cfg.Repo.Branch, "work_dir", a.cfg.Repo.WorkDir)
 		return nil
 	}
+	a.log.Info("cloning or pulling repository", "url", a.cfg.Repo.URL, "branch", a.cfg.Repo.Branch, "work_dir", a.cfg.Repo.WorkDir)
 	return a.repo.CloneOrPull(ctx)
 }
 
 func (a *App) doReview(ctx context.Context, stats *CycleStats) error {
 	if a.dryRun {
-		a.log.Info("[dry-run] would review codebase with Claude")
+		a.log.Info("[dry-run] would review codebase with Claude", "model", a.cfg.Claude.Model, "work_dir", a.cfg.Repo.WorkDir)
 		return nil
 	}
 
+	a.log.Info("invoking Claude to review codebase", "model", a.cfg.Claude.Model, "budget_per_call", a.cfg.Claude.MaxBudgetPerCall)
 	output, err := a.claude.Run(ctx, a.repo.WorkDir(), claude.ReviewPrompt())
 	if err != nil {
 		return fmt.Errorf("review: %w", err)
 	}
 
+	a.log.Info("parsing Claude review output")
 	items, _, err := claude.ParseReviewOutput(output)
 	if err != nil {
 		return fmt.Errorf("parsing review: %w", err)
 	}
 
 	stats.ItemsFound = len(items)
-	// Store items temporarily for ingest phase
+	a.log.Info("review complete", "items_found", len(items))
+	for i, item := range items {
+		a.log.Info("review item", "index", i+1, "title", item.Title, "priority", item.Priority, "category", item.Category)
+	}
 	a.reviewItems = items
 	return nil
 }
 
 func (a *App) doIngest(ctx context.Context, stats *CycleStats) error {
 	if a.dryRun {
-		a.log.Info("[dry-run] would ingest items into backlog")
+		a.log.Info("[dry-run] would ingest items into backlog", "items_to_ingest", len(a.reviewItems))
 		return nil
 	}
 
 	if a.reviewItems == nil {
+		a.log.Info("no review items to ingest")
 		return nil
 	}
 
+	a.log.Info("ingesting review items into backlog", "items_to_ingest", len(a.reviewItems))
 	inserted, err := a.manager.Ingest(ctx, a.reviewItems)
 	if err != nil {
 		return fmt.Errorf("ingest: %w", err)
 	}
 
+	a.log.Info("ingestion complete", "new_items_inserted", inserted, "duplicates_skipped", len(a.reviewItems)-inserted)
 	stats.ItemsInserted = inserted
 	a.reviewItems = nil
 	return nil
 }
 
 func (a *App) doEvaluateThreshold(ctx context.Context, stats *CycleStats) error {
+	a.log.Info("evaluating backlog thresholds",
+		"high_threshold", a.cfg.Backlog.HighThreshold,
+		"medium_threshold", a.cfg.Backlog.MediumThreshold,
+		"low_threshold", a.cfg.Backlog.LowThreshold,
+		"max_per_cycle", a.cfg.Backlog.MaxPerCycle,
+	)
 	result, err := backlog.EvaluateThreshold(ctx, a.store,
 		a.cfg.Backlog.HighThreshold,
 		a.cfg.Backlog.MediumThreshold,
@@ -169,33 +196,43 @@ func (a *App) doEvaluateThreshold(ctx context.Context, stats *CycleStats) error 
 		return fmt.Errorf("threshold evaluation: %w", err)
 	}
 
-	a.log.Info("threshold evaluation", "should_implement", result.ShouldImplement, "reason", result.Reason, "items", len(result.SelectedItems))
+	a.log.Info("threshold evaluation result",
+		"should_implement", result.ShouldImplement,
+		"reason", result.Reason,
+		"selected_items", len(result.SelectedItems),
+	)
 
 	if !result.ShouldImplement {
 		a.selectedItems = nil
 		return nil
 	}
 
+	for i, item := range result.SelectedItems {
+		a.log.Info("selected for implementation", "index", i+1, "title", item.Title, "priority", item.Priority)
+	}
 	a.selectedItems = result.SelectedItems
 	return nil
 }
 
 func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 	if a.selectedItems == nil {
-		a.log.Info("no items to implement")
+		a.log.Info("no items selected for implementation, nothing to do")
 		return nil
 	}
 
 	if a.dryRun {
-		a.log.Info("[dry-run] would implement items", "count", len(a.selectedItems))
+		for i, item := range a.selectedItems {
+			a.log.Info("[dry-run] would implement item", "index", i+1, "title", item.Title, "priority", item.Priority, "category", item.Category)
+		}
 		return nil
 	}
 
-	for _, item := range a.selectedItems {
+	a.log.Info("beginning implementation", "items_to_implement", len(a.selectedItems))
+	for i, item := range a.selectedItems {
+		a.log.Info("implementing item", "index", i+1, "of", len(a.selectedItems), "title", item.Title)
 		if err := a.implementItem(ctx, item, stats); err != nil {
 			a.log.Error("failed to implement item", "title", item.Title, "error", err)
 			stats.Errors = append(stats.Errors, err)
-			// Continue with other items
 		}
 	}
 
@@ -203,7 +240,7 @@ func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 }
 
 func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *CycleStats) error {
-	a.log.Info("implementing item", "title", item.Title, "priority", item.Priority)
+	a.log.Info("starting item implementation", "title", item.Title, "priority", item.Priority, "category", item.Category, "attempt", item.Attempts+1)
 
 	// Mark as in progress
 	item.Status = backlog.StatusInProgress
@@ -211,6 +248,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	a.store.Update(ctx, item)
 
 	// Check budget
+	a.log.Info("checking budget", "spent", a.claude.Budget().Spent(), "max_per_call", a.cfg.Claude.MaxBudgetPerCall, "max_total", a.cfg.Claude.MaxBudgetTotal)
 	if !a.claude.Budget().CanSpend(a.cfg.Claude.MaxBudgetPerCall) {
 		a.notifier.Send(notify.OutOfTokensNotification(
 			a.claude.Budget().Spent(), a.cfg.Claude.MaxBudgetTotal,
@@ -219,12 +257,15 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 
 	// Create branch
+	a.log.Info("creating feature branch", "prefix", a.cfg.Repo.PRBranchPrefix, "category", item.Category)
 	branchName, err := a.repo.CreateBranch(ctx, a.cfg.Repo.PRBranchPrefix, string(item.Category), item.Title)
 	if err != nil {
 		return fmt.Errorf("creating branch: %w", err)
 	}
+	a.log.Info("created branch", "branch", branchName)
 
 	// Invoke Claude to implement
+	a.log.Info("invoking Claude to implement changes", "title", item.Title)
 	prompt := claude.ImplementPrompt(item)
 	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
 	if err != nil {
@@ -233,6 +274,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 
 	// Check if there are any changes
+	a.log.Info("checking for code changes")
 	hasChanges, err := a.repo.HasChanges(ctx)
 	if err != nil {
 		return fmt.Errorf("checking changes: %w", err)
@@ -246,6 +288,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 
 	// Run tests with retry loop
+	a.log.Info("running tests", "max_retries", a.cfg.Testing.MaxRetries)
 	testResult, err := a.runTestsWithRetry(ctx, item)
 	if err != nil {
 		a.repo.RevertToClean(ctx)
@@ -257,6 +300,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 
 	// Stage and commit
+	a.log.Info("tests passed, staging and committing changes")
 	a.repo.StageAll(ctx)
 	commitMsg := fmt.Sprintf("autobacklog: %s\n\n%s", item.Title, item.Description)
 	if err := a.repo.Commit(ctx, commitMsg); err != nil {
@@ -264,10 +308,12 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 
 	// Push and create PR
+	a.log.Info("pushing branch to remote", "branch", branchName)
 	if err := a.repo.Push(ctx, branchName); err != nil {
 		return fmt.Errorf("pushing: %w", err)
 	}
 
+	a.log.Info("creating pull request", "title", item.Title, "base", a.cfg.Repo.Branch, "head", branchName)
 	prBody := gh.FormatPRBody(item.Title, item.Description, string(item.Category), testResult)
 	prURL, err := gh.CreatePR(ctx, a.repo.WorkDir(), gh.PRRequest{
 		Title:      fmt.Sprintf("[autobacklog] %s", item.Title),
@@ -279,6 +325,8 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		return fmt.Errorf("creating PR: %w", err)
 	}
 
+	a.log.Info("pull request created", "pr_url", prURL, "title", item.Title)
+
 	item.Status = backlog.StatusDone
 	item.PRLink = prURL
 	a.store.Update(ctx, item)
@@ -287,7 +335,17 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 
 	a.notifier.Send(notify.PRCreatedNotification(item.Title, prURL, item.Description))
 
+	// Enable auto-merge if configured
+	if a.cfg.GitHub.AutoMerge {
+		if err := gh.EnableAutoMerge(ctx, a.repo.WorkDir(), prURL, a.log); err != nil {
+			a.log.Warn("auto-merge failed, PR still open for manual merge", "pr", prURL, "error", err)
+		} else {
+			stats.PRsAutoMerged++
+		}
+	}
+
 	// Return to main branch for next item
+	a.log.Info("returning to base branch", "branch", a.cfg.Repo.Branch)
 	a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch)
 
 	return nil
@@ -304,7 +362,9 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item) (string
 	if a.cfg.Testing.OverrideCommand != "" {
 		command = "sh"
 		args = []string{"-c", a.cfg.Testing.OverrideCommand}
+		a.log.Info("using override test command", "command", a.cfg.Testing.OverrideCommand)
 	} else if a.cfg.Testing.AutoDetect {
+		a.log.Info("auto-detecting test framework", "work_dir", workDir)
 		detected := runner.Detect(workDir, a.log)
 		if detected == nil {
 			a.log.Warn("no test framework detected, skipping tests")
@@ -312,24 +372,28 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item) (string
 		}
 		command = detected.Command
 		args = detected.Args
+		a.log.Info("detected test framework", "command", command, "args", args)
 	} else {
+		a.log.Info("testing disabled, skipping")
 		return "tests disabled", nil
 	}
 
 	var lastOutput string
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
+		a.log.Info("running test suite", "attempt", attempt, "max_attempts", maxRetries+1)
 		result, err := a.runner.Run(ctx, workDir, command, args)
 		if err != nil {
 			return "", fmt.Errorf("running tests: %w", err)
 		}
 
 		if result.Passed {
+			a.log.Info("tests passed", "attempt", attempt)
 			return result.Output, nil
 		}
 
 		lastOutput = result.Output
 		if attempt <= maxRetries {
-			a.log.Warn("tests failed, attempting fix", "attempt", attempt, "max_retries", maxRetries)
+			a.log.Warn("tests failed, invoking Claude to fix", "attempt", attempt, "max_retries", maxRetries)
 
 			// Ask Claude to fix the tests
 			fixPrompt := claude.FixTestPrompt(result.Output)
@@ -344,7 +408,12 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item) (string
 }
 
 func (a *App) doDocument(ctx context.Context, stats *CycleStats) error {
-	if a.dryRun || stats.ItemsImplemented == 0 {
+	if a.dryRun {
+		a.log.Info("[dry-run] would update documentation", "items_implemented", stats.ItemsImplemented)
+		return nil
+	}
+	if stats.ItemsImplemented == 0 {
+		a.log.Info("no items implemented, skipping documentation update")
 		return nil
 	}
 
@@ -357,9 +426,11 @@ func (a *App) doDocument(ctx context.Context, stats *CycleStats) error {
 	}
 
 	if len(changes) == 0 {
+		a.log.Info("no successful changes to document")
 		return nil
 	}
 
+	a.log.Info("invoking Claude to update documentation", "changes", len(changes))
 	prompt := claude.DocumentPrompt(changes)
 	_, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
 	if err != nil {

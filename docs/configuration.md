@@ -17,6 +17,7 @@ Autobacklog is configured via a YAML file. All `${VAR}` references are interpola
 |-------|------|---------|-------------|
 | `pat` | string | | GitHub Personal Access Token (inline) |
 | `pat_file` | string | | Path to file containing PAT |
+| `auto_merge` | bool | `false` | Auto-merge PRs via `gh pr merge --squash --auto` after CI passes |
 
 Falls back to `GITHUB_TOKEN` environment variable if neither is set.
 

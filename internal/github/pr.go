@@ -46,6 +46,25 @@ func CreatePR(ctx context.Context, workDir string, req PRRequest, log *slog.Logg
 	return prURL, nil
 }
 
+// EnableAutoMerge enables GitHub auto-merge on a PR using `gh pr merge --squash --auto`.
+// This tells GitHub to merge the PR automatically once all required checks pass.
+func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slog.Logger) error {
+	log.Info("enabling auto-merge", "pr", prURL)
+
+	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", prURL, "--squash", "--auto")
+	cmd.Dir = workDir
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("gh pr merge --auto: %w\n%s", err, stderr.String())
+	}
+
+	log.Info("auto-merge enabled", "pr", prURL)
+	return nil
+}
+
 // FormatPRBody creates a structured PR body from the given fields.
 func FormatPRBody(title, description, category, testResults string) string {
 	var b strings.Builder

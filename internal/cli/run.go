@@ -95,6 +95,7 @@ func runOnce(cmd *cobra.Command, args []string) error {
 		"items_inserted", stats.ItemsInserted,
 		"items_implemented", stats.ItemsImplemented,
 		"prs_created", stats.PRsCreated,
+		"prs_auto_merged", stats.PRsAutoMerged,
 	)
 
 	return nil
