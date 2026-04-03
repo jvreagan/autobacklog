@@ -2,3 +2,4 @@ autobacklog
 *.db
 *.exe
 .env
+autobacklog.yaml

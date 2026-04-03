@@ -106,6 +106,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 				"items_found", stats.ItemsFound,
 				"items_implemented", stats.ItemsImplemented,
 				"prs_created", stats.PRsCreated,
+				"prs_auto_merged", stats.PRsAutoMerged,
 			)
 		}
 

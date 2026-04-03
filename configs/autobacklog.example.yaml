@@ -22,6 +22,7 @@ repo:
 github:
   pat: "${GITHUB_TOKEN}"
   # pat_file: "/home/user/.github-pat"
+  auto_merge: false                    # enable to auto-merge PRs after CI passes
 
 # -----------------------------------------------------------------------------
 # Claude Code CLI

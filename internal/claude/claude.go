@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/jamesreagan/autobacklog/internal/config"
 )
@@ -61,6 +63,7 @@ func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error
 
 	cmd := exec.CommandContext(ctx, c.cfg.Binary, args...)
 	cmd.Dir = workDir
+	cmd.Env = filteredEnv()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -71,7 +74,13 @@ func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("claude timed out after %s: %w", c.cfg.Timeout, ctx.Err())
 		}
-		return "", fmt.Errorf("claude failed: %w\nstderr: %s", err, stderr.String())
+		c.log.Error("claude CLI failed",
+			"exit_error", err,
+			"stderr", stderr.String(),
+			"stdout_len", stdout.Len(),
+			"args", args[:len(args)-1], // log args without the prompt
+		)
+		return "", fmt.Errorf("claude failed: %w\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
 	}
 
 	output := stdout.String()
@@ -105,6 +114,7 @@ func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, 
 
 	cmd := exec.CommandContext(ctx, c.cfg.Binary, args...)
 	cmd.Dir = workDir
+	cmd.Env = filteredEnv()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -115,11 +125,29 @@ func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, 
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("claude timed out: %w", ctx.Err())
 		}
-		return "", fmt.Errorf("claude failed: %w\nstderr: %s", err, stderr.String())
+		c.log.Error("claude CLI failed (print mode)",
+			"exit_error", err,
+			"stderr", stderr.String(),
+			"stdout_len", stdout.Len(),
+			"args", args[:len(args)-1],
+		)
+		return "", fmt.Errorf("claude failed: %w\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
 	}
 
 	// Conservative budget recording for non-JSON mode
 	c.budget.Record(c.cfg.MaxBudgetPerCall)
 
 	return stdout.String(), nil
+}
+
+// filteredEnv returns the current environment with the CLAUDECODE variable
+// removed, which prevents the "nested session" check from blocking invocation.
+func filteredEnv() []string {
+	var env []string
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "CLAUDECODE=") {
+			env = append(env, e)
+		}
+	}
+	return env
 }
