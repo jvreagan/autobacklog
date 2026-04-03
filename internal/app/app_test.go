@@ -1188,6 +1188,417 @@ func TestRunTestsWithRetry_NeverExceedsMaxRetries(t *testing.T) {
 // State tests (extending existing)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// implementItem — additional error path tests
+// ---------------------------------------------------------------------------
+
+func TestImplementItem_CreateBranchError(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.createBranchErr = errors.New("branch already exists")
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item)
+
+	stats := &CycleStats{}
+	err := a.implementItem(ctx, item, stats)
+	if err == nil {
+		t.Fatal("expected branch creation error")
+	}
+	// Claude should not be invoked if branch creation fails
+	ai := a.claude.(*mockAIClient)
+	if ai.runPrintCalls != 0 {
+		t.Error("Claude should not be called when branch creation fails")
+	}
+}
+
+func TestImplementItem_HasChangesError(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesErr = errors.New("git status failed")
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item)
+
+	stats := &CycleStats{}
+	err := a.implementItem(ctx, item, stats)
+	if err == nil {
+		t.Fatal("expected HasChanges error")
+	}
+	// Tests should not be run
+	tr := a.runner.(*mockTestRunner)
+	if tr.calls != 0 {
+		t.Error("tests should not run when HasChanges errors")
+	}
+}
+
+func TestImplementItem_CheckoutAfterPR_Error(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.checkoutErr = errors.New("checkout failed")
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: true, Output: "ok"}}
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item)
+
+	stats := &CycleStats{}
+	err := a.implementItem(ctx, item, stats)
+	// The final checkout error IS returned as an error
+	if err == nil {
+		t.Fatal("expected checkout error after PR")
+	}
+	// PR should still have been created
+	if stats.PRsCreated != 1 {
+		t.Errorf("PRsCreated = %d, want 1 (PR was created before checkout failed)", stats.PRsCreated)
+	}
+}
+
+func TestImplementItem_UpdateToDone_Error(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	ctx := context.Background()
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: true, Output: "ok"}}
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item)
+
+	// Close the store after insert to cause Update to fail
+	a.store.Close()
+
+	stats := &CycleStats{}
+	err := a.implementItem(ctx, item, stats)
+	// The first store.Update (to in_progress) will fail
+	if err == nil {
+		t.Fatal("expected store error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runTestsWithRetry — Claude fix error during retry
+// ---------------------------------------------------------------------------
+
+func TestRunTestsWithRetry_ClaudeFixError(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	a.cfg.Testing.MaxRetries = 2
+
+	ai := a.claude.(*mockAIClient)
+	// Claude fix attempt fails
+	ai.runPrintErrors = []error{errors.New("claude fix failed")}
+
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: false, Output: "FAIL"}}
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	_, err := a.runTestsWithRetry(context.Background(), item)
+	if err == nil {
+		t.Fatal("expected error from Claude fix failure")
+	}
+	// Only 1 test run (before the fix attempt)
+	if tr.calls != 1 {
+		t.Errorf("runner calls = %d, want 1", tr.calls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// doDocument — additional path tests
+// ---------------------------------------------------------------------------
+
+func TestDoDocument_ClaudeError_NonFatal(t *testing.T) {
+	a := newTestApp(t)
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintErrors = []error{errors.New("doc update failed")}
+
+	doneItem := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	doneItem.Status = backlog.StatusDone
+	a.selectedItems = []*backlog.Item{doneItem}
+
+	stats := &CycleStats{ItemsImplemented: 1}
+	err := a.doDocument(context.Background(), stats)
+	if err != nil {
+		t.Fatalf("doDocument should not return error (non-fatal), got: %v", err)
+	}
+}
+
+func TestDoDocument_NoDoneItems(t *testing.T) {
+	a := newTestApp(t)
+
+	// selectedItems exist but none are done
+	failedItem := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	failedItem.Status = backlog.StatusFailed
+	a.selectedItems = []*backlog.Item{failedItem}
+
+	stats := &CycleStats{ItemsImplemented: 1}
+	err := a.doDocument(context.Background(), stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ai := a.claude.(*mockAIClient)
+	if ai.runPrintCalls != 0 {
+		t.Error("should not invoke Claude when no items are done")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// doImplement — dry run with selected items
+// ---------------------------------------------------------------------------
+
+func TestDoImplement_DryRun_WithSelectedItems(t *testing.T) {
+	a := newTestApp(t, func(a *App) { a.dryRun = true })
+	ctx := context.Background()
+
+	a.selectedItems = []*backlog.Item{
+		backlog.NewItem("Fix A", "desc", "a.go", backlog.PriorityHigh, backlog.CategoryBug),
+		backlog.NewItem("Fix B", "desc", "b.go", backlog.PriorityMedium, backlog.CategoryRefactor),
+	}
+
+	stats := &CycleStats{}
+	err := a.doImplement(ctx, stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ai := a.claude.(*mockAIClient)
+	if ai.runPrintCalls != 0 {
+		t.Error("Claude should not be called in dry-run")
+	}
+	repo := a.repo.(*mockRepo)
+	if repo.createBranchCalls != 0 {
+		t.Error("branches should not be created in dry-run")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-item mixed success/failure
+// ---------------------------------------------------------------------------
+
+func TestDoImplement_MultipleItems_MixedResults(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	a.cfg.Testing.MaxRetries = 0
+	ctx := context.Background()
+
+	item1 := backlog.NewItem("Fix A", "desc", "a.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item2 := backlog.NewItem("Fix B", "desc", "b.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item1)
+	a.store.Insert(ctx, item2)
+	a.selectedItems = []*backlog.Item{item1, item2}
+
+	ai := a.claude.(*mockAIClient)
+	// First item: implement succeeds; Second item: implement succeeds
+	ai.runPrintOutputs = []string{"implemented1", "implemented2"}
+
+	tr := a.runner.(*mockTestRunner)
+	// First item: tests fail; Second item: tests pass
+	tr.results = []*runner.Result{
+		{Passed: false, Output: "FAIL"},
+		{Passed: true, Output: "ok"},
+	}
+
+	stats := &CycleStats{}
+	err := a.doImplement(ctx, stats)
+	// doImplement itself should not error (errors go to stats.Errors)
+	if err != nil {
+		t.Fatalf("doImplement should not return error: %v", err)
+	}
+	if len(stats.Errors) != 1 {
+		t.Errorf("stats.Errors len = %d, want 1 (one item failed)", len(stats.Errors))
+	}
+	if stats.ItemsImplemented != 1 {
+		t.Errorf("ItemsImplemented = %d, want 1", stats.ItemsImplemented)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunCycle — notification verification
+// ---------------------------------------------------------------------------
+
+func TestRunCycle_ErrorNotificationSent(t *testing.T) {
+	a := newTestApp(t)
+	a.repo.(*mockRepo).cloneOrPullErr = errors.New("clone failed")
+
+	a.RunCycle(context.Background())
+
+	notif := a.notifier.(*mockNotifier)
+	found := false
+	for _, n := range notif.notifications {
+		if n.Event == notify.EventError {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected error notification on state failure")
+	}
+}
+
+func TestRunCycle_CycleCompleteNotificationSent(t *testing.T) {
+	a := newTestApp(t, func(a *App) { a.dryRun = true })
+
+	a.RunCycle(context.Background())
+
+	notif := a.notifier.(*mockNotifier)
+	found := false
+	for _, n := range notif.notifications {
+		if n.Event == notify.EventCycleComplete {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected cycle_complete notification after successful cycle")
+	}
+}
+
+func TestRunCycle_StuckNotificationOnTestFailure(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	a.cfg.Testing.MaxRetries = 0
+
+	ai := a.claude.(*mockAIClient)
+	ai.runOutputs = []string{reviewJSON([2]string{"Fix bug", "high"})}
+	ai.runPrintOutputs = []string{"implemented"}
+
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: false, Output: "FAIL"}}
+
+	stats, err := a.RunCycle(context.Background())
+	if err != nil {
+		t.Fatalf("RunCycle should not error (item failure is non-fatal): %v", err)
+	}
+
+	notif := a.notifier.(*mockNotifier)
+	found := false
+	for _, n := range notif.notifications {
+		if n.Event == notify.EventStuck {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected stuck notification when item tests fail")
+	}
+	_ = stats
+}
+
+// ---------------------------------------------------------------------------
+// Strengthened negative regression tests
+// ---------------------------------------------------------------------------
+
+func TestImplementItem_FailureStatus_IsFailed(t *testing.T) {
+	// Stronger version: positively assert StatusFailed, not just != Done
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	a.cfg.Testing.MaxRetries = 0
+	ctx := context.Background()
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: false, Output: "FAIL"}}
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item)
+
+	stats := &CycleStats{}
+	a.implementItem(ctx, item, stats)
+
+	if item.Status != backlog.StatusFailed {
+		t.Errorf("status = %q, want 'failed'", item.Status)
+	}
+	if item.Attempts != 1 {
+		t.Errorf("Attempts = %d, want 1", item.Attempts)
+	}
+}
+
+func TestRunCycle_NeverExecutesStatesAfterError_VerifiesNotification(t *testing.T) {
+	a := newTestApp(t)
+	a.repo.(*mockRepo).cloneOrPullErr = errors.New("clone failed")
+
+	stats, err := a.RunCycle(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	// Verify stats recorded the error
+	if len(stats.Errors) != 1 {
+		t.Errorf("stats.Errors len = %d, want 1", len(stats.Errors))
+	}
+
+	// Verify error notification was sent
+	notif := a.notifier.(*mockNotifier)
+	if len(notif.notifications) == 0 {
+		t.Error("expected error notification")
+	}
+
+	// Verify no downstream calls
+	ai := a.claude.(*mockAIClient)
+	if ai.runCalls+ai.runPrintCalls != 0 {
+		t.Error("no AI calls should happen after clone failure")
+	}
+	tr := a.runner.(*mockTestRunner)
+	if tr.calls != 0 {
+		t.Error("no test runner calls should happen after clone failure")
+	}
+}
+
+func TestImplementItem_NeverPushes_WithoutCommit_VerifiesError(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.stageAllErr = errors.New("stage failed")
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: true, Output: "ok"}}
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item)
+
+	stats := &CycleStats{}
+	err := a.implementItem(ctx, item, stats)
+	if err == nil {
+		t.Fatal("expected staging error")
+	}
+
+	if repo.pushCalls != 0 {
+		t.Error("push should NOT be called when staging fails")
+	}
+	if repo.commitCalls != 0 {
+		t.Error("commit should NOT be called when staging fails")
+	}
+	pr := a.prCreator.(*mockPRCreator)
+	if pr.createPRCalls != 0 {
+		t.Error("PR should NOT be created when staging fails")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// State tests (extending existing)
+// ---------------------------------------------------------------------------
+
 func TestState_Description_AllStates(t *testing.T) {
 	states := []State{
 		StateClone, StateReview, StateIngest, StateEvaluateThreshold,
