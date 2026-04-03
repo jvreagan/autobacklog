@@ -94,7 +94,11 @@ func (r *Repo) run(ctx context.Context, dir string, name string, args ...string)
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, stderr.String())
+		argStr := strings.Join(args, " ")
+		if r.pat != "" {
+			argStr = strings.ReplaceAll(argStr, r.pat, "[REDACTED]")
+		}
+		return fmt.Errorf("%s %s: %w\n%s", name, argStr, err, stderr.String())
 	}
 	return nil
 }
