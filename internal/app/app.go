@@ -17,11 +17,12 @@ import (
 // App is the main orchestrator that drives the state machine.
 type App struct {
 	cfg           *config.Config
-	repo          *git.Repo
-	claude        *claude.Client
+	repo          Repository
+	claude        AIClient
 	store         backlog.Store
 	manager       *backlog.Manager
-	runner        *runner.Runner
+	runner        TestRunner
+	prCreator     PRCreator
 	notifier      notify.Notifier
 	log           *slog.Logger
 	dryRun        bool
@@ -29,7 +30,20 @@ type App struct {
 	selectedItems []*backlog.Item // transient: threshold → implement
 }
 
-// New creates a new App orchestrator.
+// defaultPRCreator wraps the free functions in the github package.
+type defaultPRCreator struct {
+	log *slog.Logger
+}
+
+func (d *defaultPRCreator) CreatePR(ctx context.Context, workDir string, req gh.PRRequest) (string, error) {
+	return gh.CreatePR(ctx, workDir, req, d.log)
+}
+
+func (d *defaultPRCreator) EnableAutoMerge(ctx context.Context, workDir string, prURL string) error {
+	return gh.EnableAutoMerge(ctx, workDir, prURL, d.log)
+}
+
+// New creates a new App orchestrator with production dependencies.
 func New(cfg *config.Config, store backlog.Store, notifier notify.Notifier, log *slog.Logger, dryRun bool) (*App, error) {
 	pat, err := cfg.ResolveGitHubPAT()
 	if err != nil && !dryRun {
@@ -38,20 +52,36 @@ func New(cfg *config.Config, store backlog.Store, notifier notify.Notifier, log 
 
 	repo := git.NewRepo(cfg.Repo.URL, cfg.Repo.Branch, cfg.Repo.WorkDir, pat, log)
 	claudeClient := claude.NewClient(cfg.Claude, log)
-	mgr := backlog.NewManager(store, log)
 	testRunner := runner.NewRunner(log, cfg.Testing.Timeout)
 
+	return NewWithDeps(cfg, repo, claudeClient, testRunner, &defaultPRCreator{log: log}, store, notifier, log, dryRun), nil
+}
+
+// NewWithDeps creates an App with explicitly provided dependencies (for testing).
+func NewWithDeps(
+	cfg *config.Config,
+	repo Repository,
+	aiClient AIClient,
+	testRunner TestRunner,
+	prCreator PRCreator,
+	store backlog.Store,
+	notifier notify.Notifier,
+	log *slog.Logger,
+	dryRun bool,
+) *App {
+	mgr := backlog.NewManager(store, log)
 	return &App{
-		cfg:      cfg,
-		repo:     repo,
-		claude:   claudeClient,
-		store:    store,
-		manager:  mgr,
-		runner:   testRunner,
-		notifier: notifier,
-		log:      log,
-		dryRun:   dryRun,
-	}, nil
+		cfg:       cfg,
+		repo:      repo,
+		claude:    aiClient,
+		store:     store,
+		manager:   mgr,
+		runner:    testRunner,
+		prCreator: prCreator,
+		notifier:  notifier,
+		log:       log,
+		dryRun:    dryRun,
+	}
 }
 
 // RunCycle executes one full cycle of the state machine.
@@ -329,12 +359,12 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 
 	a.log.Info("creating pull request", "title", item.Title, "base", a.cfg.Repo.Branch, "head", branchName)
 	prBody := gh.FormatPRBody(item.Title, item.Description, string(item.Category), testResult)
-	prURL, err := gh.CreatePR(ctx, a.repo.WorkDir(), gh.PRRequest{
+	prURL, err := a.prCreator.CreatePR(ctx, a.repo.WorkDir(), gh.PRRequest{
 		Title:      fmt.Sprintf("[autobacklog] %s", item.Title),
 		Body:       prBody,
 		BaseBranch: a.cfg.Repo.Branch,
 		HeadBranch: branchName,
-	}, a.log)
+	})
 	if err != nil {
 		return fmt.Errorf("creating PR: %w", err)
 	}
@@ -353,7 +383,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 
 	// Enable auto-merge if configured
 	if a.cfg.GitHub.AutoMerge {
-		if err := gh.EnableAutoMerge(ctx, a.repo.WorkDir(), prURL, a.log); err != nil {
+		if err := a.prCreator.EnableAutoMerge(ctx, a.repo.WorkDir(), prURL); err != nil {
 			a.log.Warn("auto-merge failed, PR still open for manual merge", "pr", prURL, "error", err)
 		} else {
 			stats.PRsAutoMerged++
@@ -458,4 +488,3 @@ func (a *App) doDocument(ctx context.Context, stats *CycleStats) error {
 
 	return nil
 }
-

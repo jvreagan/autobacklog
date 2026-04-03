@@ -36,6 +36,7 @@ claude:
   max_budget_per_call: 10.00
   max_budget_total: 100.00
   timeout: "10m"
+  # dangerously_skip_permissions: false  # pass --dangerously-skip-permissions to Claude CLI
 
 backlog:
   high_threshold: 1     # implement immediately when any high-priority item exists

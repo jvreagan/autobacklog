@@ -225,3 +225,109 @@ func TestSQLiteStore_DeleteStale(t *testing.T) {
 		t.Error("old done item should be deleted")
 	}
 }
+
+func TestSQLiteStore_ListWithPriorityFilter(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	store.Insert(ctx, NewItem("High", "", "", PriorityHigh, CategoryBug))
+	store.Insert(ctx, NewItem("Low", "", "", PriorityLow, CategoryRefactor))
+
+	p := PriorityHigh
+	items, err := store.List(ctx, ListFilter{Priority: &p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len = %d, want 1", len(items))
+	}
+	if items[0].Title != "High" {
+		t.Errorf("Title = %q, want High", items[0].Title)
+	}
+}
+
+func TestSQLiteStore_ListWithCategoryFilter(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	store.Insert(ctx, NewItem("Bug", "", "", PriorityHigh, CategoryBug))
+	store.Insert(ctx, NewItem("Refactor", "", "", PriorityLow, CategoryRefactor))
+
+	c := CategoryBug
+	items, err := store.List(ctx, ListFilter{Category: &c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len = %d, want 1", len(items))
+	}
+	if items[0].Title != "Bug" {
+		t.Errorf("Title = %q, want Bug", items[0].Title)
+	}
+}
+
+func TestSQLiteStore_Get_NonExistentID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	_, err := store.Get(ctx, "nonexistent-id")
+	if err == nil {
+		t.Error("expected error for non-existent ID")
+	}
+}
+
+func TestSQLiteStore_Insert_DuplicateID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	item := NewItem("First", "desc", "f.go", PriorityHigh, CategoryBug)
+	if err := store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert another item with the same ID
+	dup := &Item{
+		ID:        item.ID,
+		Title:     "Duplicate",
+		Priority:  PriorityLow,
+		Category:  CategoryRefactor,
+		Status:    StatusPending,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	err := store.Insert(ctx, dup)
+	if err == nil {
+		t.Error("expected error for duplicate ID insertion")
+	}
+}
+
+func TestSQLiteStore_DeleteStale_OnlyTerminalStatuses(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Insert old items with various statuses
+	statuses := []Status{StatusPending, StatusInProgress, StatusDone, StatusFailed, StatusSkipped}
+	for _, s := range statuses {
+		item := NewItem("Item "+string(s), "", "", PriorityLow, CategoryRefactor)
+		item.Status = s
+		store.Insert(ctx, item)
+		// Force old updated_at
+		store.db.ExecContext(ctx, `UPDATE backlog_items SET updated_at=? WHERE id=?`,
+			time.Now().UTC().AddDate(0, 0, -60), item.ID)
+	}
+
+	n, err := store.DeleteStale(ctx, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only done, failed, skipped should be deleted (3 terminal statuses)
+	if n != 3 {
+		t.Errorf("deleted %d items, want 3 (done+failed+skipped)", n)
+	}
+
+	// Verify pending and in_progress still exist
+	items, _ := store.List(ctx, ListFilter{})
+	if len(items) != 2 {
+		t.Errorf("remaining items = %d, want 2 (pending + in_progress)", len(items))
+	}
+}

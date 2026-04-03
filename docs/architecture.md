@@ -7,7 +7,7 @@ Autobacklog is a state machine that cycles through discrete phases. Each phase i
 ## State Machine
 
 ```
-CLONE → REVIEW → INGEST → EVALUATE_THRESHOLD → IMPLEMENT → TEST → PR → DOCUMENT → DONE
+CLONE → REVIEW → INGEST → EVALUATE_THRESHOLD → IMPLEMENT → (TEST) → (PR) → DOCUMENT → DONE
 ```
 
 ### States
@@ -27,27 +27,27 @@ CLONE → REVIEW → INGEST → EVALUATE_THRESHOLD → IMPLEMENT → TEST → PR
 **IMPLEMENT** — For each selected item:
 1. Creates a feature branch (`autobacklog/<category>/<title-slug>`)
 2. Invokes Claude to implement the fix
-3. Runs tests (with retry loop)
-4. Stages, commits, pushes
-5. Creates a PR via `gh`
-6. Updates item status and PR link
+3. Runs tests with retry loop (auto-detect or override command)
+4. On test failure, asks Claude to fix (up to `max_retries` attempts); if still failing, reverts and marks failed
+5. Stages, commits, pushes
+6. Creates a PR via `gh pr create`
+7. Optionally enables auto-merge via `gh pr merge --squash --auto`
+8. Updates item status and PR link
 
-**TEST** — Integrated into the implement loop. Auto-detects the test framework by checking for known files (go.mod, package.json, pytest.ini, etc.). If tests fail, Claude is asked to fix them (up to `max_retries` attempts). If still failing, changes are reverted and the item is marked failed.
+> **Note:** The `TEST` and `PR` states exist in the state enum but are **skipped** during the main loop — testing and PR creation are integrated into the `IMPLEMENT` phase's `implementItem()` method.
 
-**PR** — Creates a GitHub pull request via `gh pr create` with a structured body including summary, category, and test results.
-
-**DOCUMENT** — Optionally invokes Claude to update project documentation reflecting the changes made.
+**DOCUMENT** — Optionally invokes Claude to update project documentation reflecting the changes made. Non-fatal if it fails.
 
 ## Package Structure
 
 ```
 internal/
-├── app/          Orchestrator — drives the state machine
+├── app/          Orchestrator — drives the state machine, defines dependency interfaces
 ├── backlog/      Domain types, Store interface, SQLite impl, threshold logic
 ├── claude/       Claude Code CLI subprocess wrapper, prompts, JSON parser, budget tracker
 ├── config/       YAML loading, env var interpolation, validation, defaults
 ├── git/          Git operations: clone, branch, commit, push
-├── github/       PR creation via gh CLI
+├── github/       PR creation and auto-merge via gh CLI, GitHub auth setup
 ├── notify/       Notifier interface, SMTP email implementation
 ├── runner/       Test framework detection, test execution
 ├── cli/          Cobra commands (run, daemon, status, init, version)
@@ -55,6 +55,17 @@ internal/
 ```
 
 ## Key Design Decisions
+
+### Dependency Injection via Interfaces
+
+The `app` package defines interfaces for its external dependencies, following the Go convention of interfaces in the consumer package:
+
+- **`Repository`** — abstracts git operations (clone, branch, commit, push, revert)
+- **`AIClient`** — abstracts Claude CLI invocations and budget tracking
+- **`TestRunner`** — abstracts test execution
+- **`PRCreator`** — abstracts GitHub PR creation and auto-merge
+
+The production constructor `New()` builds concrete implementations and delegates to `NewWithDeps()`, which accepts these interfaces. This enables comprehensive testing of the orchestrator with mock dependencies.
 
 ### CGo-free SQLite
 Uses `modernc.org/sqlite` (pure Go) instead of `github.com/mattn/go-sqlite3` to avoid CGo dependency, making cross-compilation simpler.
@@ -68,7 +79,7 @@ Two-level budget control:
 2. `max_budget_total` — tracked in-process; stops the daemon when exceeded
 
 ### Always PR, Never Direct Push
-All changes go through pull requests. The daemon never pushes to the main branch directly.
+All changes go through pull requests. The daemon never pushes to the main branch directly. When `auto_merge` is enabled, PRs are set to auto-merge via `gh pr merge --squash --auto` once all required CI checks pass.
 
 ### Deduplication
 Items are deduplicated by comparing title similarity + file path against non-terminal items in the backlog. This prevents the same issue from being filed repeatedly across cycles.

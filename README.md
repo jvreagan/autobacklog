@@ -89,9 +89,9 @@ Autobacklog detects and runs tests automatically:
 |---------------|-----------|---------|
 | `go.mod` | Go | `go test ./...` |
 | `package.json` (with test script) | Node.js | `npm test` |
-| `pytest.ini` / `pyproject.toml` | pytest | `pytest` |
+| `pytest.ini` / `setup.cfg` / `pyproject.toml` | pytest | `pytest` |
 | `pom.xml` | Maven | `mvn test` |
-| `build.gradle` | Gradle | `gradle test` |
+| `build.gradle` / `build.gradle.kts` | Gradle | `gradle test` |
 | `Cargo.toml` | Rust | `cargo test` |
 | `Makefile` (test target) | Make | `make test` |
 
@@ -117,7 +117,7 @@ internal/
   claude/                         Claude Code CLI wrapper, prompts, parser
   config/                         YAML config loading with env var interpolation
   git/                            Clone, branch, commit operations
-  github/                         PR creation via gh CLI
+  github/                         PR creation, auto-merge, and auth via gh CLI
   notify/                         Email notifications
   runner/                         Test framework detection and execution
   cli/                            Cobra CLI commands
