@@ -33,6 +33,7 @@ claude:
   max_budget_per_call: 10.00         # USD budget cap per CLI invocation
   max_budget_total: 100.00           # USD total budget across all invocations
   timeout: "10m"                     # timeout per invocation
+  # dangerously_skip_permissions: false  # pass --dangerously-skip-permissions to Claude CLI (disabled by default)
 
 # -----------------------------------------------------------------------------
 # Backlog Management
