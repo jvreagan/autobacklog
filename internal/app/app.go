@@ -230,7 +230,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	prompt := claude.ImplementPrompt(item)
 	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
 	if err != nil {
-		a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch)
+		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
+			a.log.Error("failed to checkout main branch after implement error", "branch", a.cfg.Repo.Branch, "error", coErr)
+		}
 		return fmt.Errorf("claude implement: %w", err)
 	}
 
@@ -241,7 +243,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 	if !hasChanges {
 		a.log.Warn("claude made no changes", "title", item.Title)
-		a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch)
+		if err := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); err != nil {
+			return fmt.Errorf("checkout main branch after no changes: %w", err)
+		}
 		item.Status = backlog.StatusSkipped
 		if err := a.store.Update(ctx, item); err != nil {
 			return fmt.Errorf("updating item status to skipped: %w", err)
@@ -253,7 +257,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	testResult, err := a.runTestsWithRetry(ctx, item)
 	if err != nil {
 		a.repo.RevertToClean(ctx)
-		a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch)
+		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
+			a.log.Error("failed to checkout main branch after test failure", "branch", a.cfg.Repo.Branch, "error", coErr)
+		}
 		item.Status = backlog.StatusFailed
 		if updateErr := a.store.Update(ctx, item); updateErr != nil {
 			a.log.Error("failed to update item status to failed", "title", item.Title, "error", updateErr)
@@ -298,7 +304,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	a.notifier.Send(notify.PRCreatedNotification(item.Title, prURL, item.Description))
 
 	// Return to main branch for next item
-	a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch)
+	if err := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); err != nil {
+		return fmt.Errorf("checkout main branch after PR: %w", err)
+	}
 
 	return nil
 }
