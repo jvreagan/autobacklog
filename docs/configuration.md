@@ -30,6 +30,7 @@ Falls back to `GITHUB_TOKEN` environment variable if neither is set.
 | `max_budget_per_call` | float | `10.00` | USD cap per CLI invocation |
 | `max_budget_total` | float | `100.00` | USD cap across all invocations |
 | `timeout` | duration | `10m` | Timeout per invocation |
+| `dangerously_skip_permissions` | bool | `false` | Pass `--dangerously-skip-permissions` to Claude CLI |
 
 ## `backlog`
 
