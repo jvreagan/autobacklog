@@ -263,7 +263,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 
 	// Stage and commit
-	a.repo.StageAll(ctx)
+	if err := a.repo.StageAll(ctx); err != nil {
+		return fmt.Errorf("staging changes: %w", err)
+	}
 	commitMsg := fmt.Sprintf("autobacklog: %s\n\n%s", item.Title, item.Description)
 	if err := a.repo.Commit(ctx, commitMsg); err != nil {
 		return fmt.Errorf("committing: %w", err)
