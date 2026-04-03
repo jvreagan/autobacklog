@@ -1,7 +1,9 @@
 package claude
 
 import (
+	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,5 +74,79 @@ func TestBuildArgs_PromptIsLast(t *testing.T) {
 	args := c.buildArgs(prompt, true)
 	if len(args) == 0 || args[len(args)-1] != prompt {
 		t.Errorf("prompt should be the last argument, got %v", args)
+	}
+}
+
+func TestFilteredEnv_RemovesCLAUDECODE(t *testing.T) {
+	t.Setenv("CLAUDECODE", "1")
+	env := filteredEnv()
+	for _, e := range env {
+		if strings.HasPrefix(e, "CLAUDECODE=") {
+			t.Error("CLAUDECODE should be removed from env")
+		}
+	}
+}
+
+func TestFilteredEnv_PreservesOtherVars(t *testing.T) {
+	t.Setenv("AUTOBACKLOG_TEST_VAR", "keep_me")
+	env := filteredEnv()
+	found := false
+	for _, e := range env {
+		if strings.HasPrefix(e, "AUTOBACKLOG_TEST_VAR=") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("other env vars should be preserved")
+	}
+}
+
+func TestBuildArgs_IncludesModel(t *testing.T) {
+	c := newTestClient(false)
+	args := c.buildArgs("prompt", false)
+	for i, arg := range args {
+		if arg == "--model" && i+1 < len(args) && args[i+1] == "sonnet" {
+			return
+		}
+	}
+	t.Error("--model sonnet should be present")
+}
+
+func TestBuildArgs_IncludesBudget(t *testing.T) {
+	c := newTestClient(false)
+	args := c.buildArgs("prompt", false)
+	for i, arg := range args {
+		if arg == "--max-budget-usd" && i+1 < len(args) && args[i+1] == "5.00" {
+			return
+		}
+	}
+	t.Error("--max-budget-usd 5.00 should be present")
+}
+
+func TestClient_Run_BudgetExceeded(t *testing.T) {
+	c := newTestClient(false)
+	// Exhaust budget
+	c.budget.Record(49.0)
+
+	_, err := c.Run(context.Background(), "/tmp", "prompt")
+	if err == nil {
+		t.Fatal("expected budget exceeded error")
+	}
+	if !strings.Contains(err.Error(), "budget exceeded") {
+		t.Errorf("error should mention budget, got: %v", err)
+	}
+}
+
+func TestClient_RunPrint_BudgetExceeded(t *testing.T) {
+	c := newTestClient(false)
+	c.budget.Record(49.0)
+
+	_, err := c.RunPrint(context.Background(), "/tmp", "prompt")
+	if err == nil {
+		t.Fatal("expected budget exceeded error")
+	}
+	if !strings.Contains(err.Error(), "budget exceeded") {
+		t.Errorf("error should mention budget, got: %v", err)
 	}
 }

@@ -3,7 +3,6 @@ package backlog
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"testing"
 )
 
@@ -126,9 +125,6 @@ func TestManager_CleanStale(t *testing.T) {
 	mgr, store := newTestManager(t)
 	ctx := context.Background()
 
-	dbPath := filepath.Join(t.TempDir(), "clean.db")
-	_ = dbPath
-
 	// Insert items with various statuses
 	for _, s := range []Status{StatusPending, StatusDone, StatusFailed} {
 		item := NewItem("Item "+string(s), "", "", PriorityLow, CategoryRefactor)
@@ -143,5 +139,38 @@ func TestManager_CleanStale(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("cleaned %d, want 0 (all items are recent)", n)
+	}
+}
+
+func TestManager_Ingest_EmptySlice(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	ctx := context.Background()
+
+	n, err := mgr.Ingest(ctx, []*Item{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("inserted = %d, want 0", n)
+	}
+}
+
+func TestManager_Ingest_NilSlice(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	ctx := context.Background()
+
+	n, err := mgr.Ingest(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("inserted = %d, want 0", n)
+	}
+}
+
+func TestSimilarText_NegativeCase(t *testing.T) {
+	// "Fix bug" vs "Fix typo" — neither contains the other, not equal
+	if similarText("Fix bug", "Fix typo") {
+		t.Error("'Fix bug' and 'Fix typo' should NOT be similar")
 	}
 }
