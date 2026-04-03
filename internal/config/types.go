@@ -28,11 +28,12 @@ type GitHubConfig struct {
 }
 
 type ClaudeConfig struct {
-	Binary           string        `yaml:"binary"`
-	Model            string        `yaml:"model"`
-	MaxBudgetPerCall float64       `yaml:"max_budget_per_call"`
-	MaxBudgetTotal   float64       `yaml:"max_budget_total"`
-	Timeout          time.Duration `yaml:"timeout"`
+	Binary                    string        `yaml:"binary"`
+	Model                     string        `yaml:"model"`
+	MaxBudgetPerCall          float64       `yaml:"max_budget_per_call"`
+	MaxBudgetTotal            float64       `yaml:"max_budget_total"`
+	Timeout                   time.Duration `yaml:"timeout"`
+	DangerouslySkipPermissions bool         `yaml:"dangerously_skip_permissions"`
 }
 
 type BacklogConfig struct {
