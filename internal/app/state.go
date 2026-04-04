@@ -1,6 +1,9 @@
 package app
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // State represents a step in the orchestrator state machine.
 type State int
@@ -76,6 +79,14 @@ func (s State) Next() State {
 	return s + 1
 }
 
+// ItemResult records the outcome of a single backlog item.
+type ItemResult struct {
+	Title    string
+	Category string
+	Status   string // "done", "failed", "skipped"
+	PRLink   string
+}
+
 // CycleStats tracks statistics for a single cycle.
 type CycleStats struct {
 	ItemsFound       int
@@ -85,4 +96,72 @@ type CycleStats struct {
 	PRsAutoMerged    int
 	TestFailures     int
 	Errors           []error
+	Items            []ItemResult
+	BudgetSummary    string
+}
+
+// Summary returns a human-readable summary of the cycle.
+func (s *CycleStats) Summary() string {
+	if len(s.Items) == 0 {
+		if s.ItemsFound == 0 {
+			return "Cycle complete: no items found."
+		}
+		return fmt.Sprintf("Cycle complete: %d items found, none implemented.", s.ItemsFound)
+	}
+
+	var done, failed, skipped int
+	for _, item := range s.Items {
+		switch item.Status {
+		case "done":
+			done++
+		case "failed":
+			failed++
+		case "skipped":
+			skipped++
+		}
+	}
+
+	// Header line
+	var parts []string
+	if done > 0 {
+		parts = append(parts, fmt.Sprintf("%d implemented", done))
+	}
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	}
+	if skipped > 0 {
+		parts = append(parts, fmt.Sprintf("%d skipped", skipped))
+	}
+	if s.PRsCreated > 0 {
+		parts = append(parts, fmt.Sprintf("%d PR created", s.PRsCreated))
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Cycle complete: %s\n", strings.Join(parts, ", "))
+
+	// Per-item lines
+	for _, item := range s.Items {
+		cat := ""
+		if item.Category != "" {
+			cat = fmt.Sprintf(" [%s]", item.Category)
+		}
+		switch item.Status {
+		case "done":
+			suffix := ""
+			if item.PRLink != "" {
+				suffix = fmt.Sprintf(" → %s", item.PRLink)
+			}
+			fmt.Fprintf(&b, "\n  ✓ %s%s%s", item.Title, cat, suffix)
+		case "failed":
+			fmt.Fprintf(&b, "\n  ✗ %s%s — failed", item.Title, cat)
+		case "skipped":
+			fmt.Fprintf(&b, "\n  - %s%s — skipped", item.Title, cat)
+		}
+	}
+
+	if s.BudgetSummary != "" {
+		fmt.Fprintf(&b, "\n\nBudget: %s", s.BudgetSummary)
+	}
+
+	return b.String()
 }

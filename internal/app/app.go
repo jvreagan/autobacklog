@@ -142,9 +142,11 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		"prs_auto_merged", stats.PRsAutoMerged,
 		"errors", len(stats.Errors),
 	)
+	stats.BudgetSummary = a.claude.Budget().String()
+
 	a.notifier.Send(notify.CycleCompleteNotification(
 		stats.ItemsFound, stats.ItemsImplemented, stats.PRsCreated,
-		a.claude.Budget().String(),
+		stats.BudgetSummary,
 	))
 
 	return stats, nil
@@ -322,6 +324,11 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		if err := a.store.Update(ctx, item); err != nil {
 			return fmt.Errorf("updating item status to skipped: %w", err)
 		}
+		stats.Items = append(stats.Items, ItemResult{
+			Title:    item.Title,
+			Category: string(item.Category),
+			Status:   "skipped",
+		})
 		return nil
 	}
 
@@ -337,6 +344,11 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		if updateErr := a.store.Update(ctx, item); updateErr != nil {
 			a.log.Error("failed to update item status to failed", "title", item.Title, "error", updateErr)
 		}
+		stats.Items = append(stats.Items, ItemResult{
+			Title:    item.Title,
+			Category: string(item.Category),
+			Status:   "failed",
+		})
 		a.notifier.Send(notify.StuckNotification(item.Title, item.FilePath, item.Attempts, err.Error()))
 		return err
 	}
@@ -378,6 +390,12 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 	stats.ItemsImplemented++
 	stats.PRsCreated++
+	stats.Items = append(stats.Items, ItemResult{
+		Title:    item.Title,
+		Category: string(item.Category),
+		Status:   "done",
+		PRLink:   prURL,
+	})
 
 	a.notifier.Send(notify.PRCreatedNotification(item.Title, prURL, item.Description))
 

@@ -90,13 +90,7 @@ func runOnce(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cycle failed: %w", err)
 	}
 
-	log.Info("cycle complete",
-		"items_found", stats.ItemsFound,
-		"items_inserted", stats.ItemsInserted,
-		"items_implemented", stats.ItemsImplemented,
-		"prs_created", stats.PRsCreated,
-		"prs_auto_merged", stats.PRsAutoMerged,
-	)
+	fmt.Println(stats.Summary())
 
 	return nil
 }
