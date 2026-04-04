@@ -30,7 +30,7 @@ func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) 
 	seen := make(map[dedupKey]bool, len(existing))
 	var active []*Item
 	for _, ex := range existing {
-		if ex.Status == StatusDone || ex.Status == StatusSkipped {
+		if ex.Status == StatusDone || ex.Status == StatusSkipped || ex.Status == StatusFailed {
 			continue
 		}
 		seen[dedupKey{strings.ToLower(strings.TrimSpace(ex.Title)), ex.FilePath}] = true

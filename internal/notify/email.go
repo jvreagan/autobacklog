@@ -29,6 +29,8 @@ func NewEmailNotifier(cfg config.NotificationsConfig, log *slog.Logger) *EmailNo
 }
 
 // Send delivers a notification via SMTP email if the event type is enabled.
+// Uses Go's smtp.SendMail which upgrades to STARTTLS when the server advertises it.
+// PlainAuth refuses to send credentials over unencrypted connections.
 func (e *EmailNotifier) Send(n Notification) error {
 	if !e.events[n.Event] {
 		e.log.Debug("notification event disabled, skipping", "event", n.Event)

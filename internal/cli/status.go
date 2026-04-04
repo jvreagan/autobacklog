@@ -22,7 +22,11 @@ func newStatusCmd() *cobra.Command {
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
-	dbPath := filepath.Join(os.Getenv("HOME"), ".autobacklog", "backlog.db")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("determining home directory: %w", err)
+	}
+	dbPath := filepath.Join(home, ".autobacklog", "backlog.db")
 	store, err := backlog.NewSQLiteStore(dbPath)
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)

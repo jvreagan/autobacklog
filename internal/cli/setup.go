@@ -28,7 +28,7 @@ type setupResult struct {
 }
 
 // setup loads config, opens the DB, sets up auth, and creates the orchestrator.
-// Callers must defer result.store.Close() and result.cancel().
+// Callers must defer result.store.Close(), result.cancel(), and logging.Cleanup().
 func setup() (*setupResult, error) {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
@@ -47,7 +47,11 @@ func setup() (*setupResult, error) {
 		return nil, fmt.Errorf("setting up logging: %w", err)
 	}
 
-	dbPath := filepath.Join(os.Getenv("HOME"), ".autobacklog", "backlog.db")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("determining home directory: %w", err)
+	}
+	dbPath := filepath.Join(home, ".autobacklog", "backlog.db")
 	store, err := backlog.NewSQLiteStore(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
@@ -60,9 +64,13 @@ func setup() (*setupResult, error) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		log.Info("received shutdown signal")
-		cancel()
+		select {
+		case <-sigCh:
+			log.Info("received shutdown signal")
+			cancel()
+		case <-ctx.Done():
+		}
+		signal.Stop(sigCh)
 	}()
 
 	if !dryRun {

@@ -14,9 +14,13 @@ func (r *Repo) StageAll(ctx context.Context) error {
 }
 
 // Commit creates a commit with the given message.
+// Sets git user identity via -c flags so commits succeed even without global git config.
 func (r *Repo) Commit(ctx context.Context, message string) error {
 	r.log.Info("committing changes", "message", message)
-	return r.run(ctx, r.workDir, "git", "commit", "-m", message)
+	return r.run(ctx, r.workDir, "git",
+		"-c", "user.name=autobacklog",
+		"-c", "user.email=autobacklog@noreply",
+		"commit", "-m", message)
 }
 
 // HasChanges checks if there are any staged or unstaged changes.

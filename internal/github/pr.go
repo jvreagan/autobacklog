@@ -83,7 +83,8 @@ func FormatPRBody(title, description, category, testResults string, issueNumber 
 	if testResults != "" {
 		b.WriteString("## Test Results\n\n")
 		b.WriteString("```\n")
-		b.WriteString(testResults)
+		// Replace backtick sequences that would break the markdown code fence.
+		b.WriteString(strings.ReplaceAll(testResults, "```", "` ` `"))
 		b.WriteString("\n```\n\n")
 	}
 	b.WriteString("---\n")

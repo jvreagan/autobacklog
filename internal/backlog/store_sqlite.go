@@ -55,6 +55,12 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	// Enable WAL mode for better concurrent read performance.
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enabling WAL mode: %w", err)
+	}
+
 	if _, err := db.Exec(createTableSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating tables: %w", err)
@@ -97,9 +103,10 @@ func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
 }
 
 // Update modifies an existing item in the SQLite store.
+// Returns an error if the item does not exist (zero rows affected).
 func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
 	item.UpdatedAt = time.Now().UTC()
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE backlog_items SET title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, updated_at=?
 		 WHERE id=?`,
 		item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
@@ -108,6 +115,10 @@ func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
 	)
 	if err != nil {
 		return fmt.Errorf("updating item %q: %w", item.ID, err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("updating item %q: not found", item.ID)
 	}
 	return nil
 }

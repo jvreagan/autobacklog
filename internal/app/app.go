@@ -28,8 +28,9 @@ type App struct {
 	notifier      notify.Notifier
 	log           *slog.Logger
 	dryRun        bool
-	reviewItems   []*backlog.Item // transient: review → ingest
-	selectedItems []*backlog.Item // transient: threshold → implement
+	reviewItems   []*backlog.Item    // transient: review → ingest
+	selectedItems []*backlog.Item    // transient: threshold → implement
+	cachedDetect  *runner.DetectResult // cached test framework per cycle
 }
 
 // defaultPRCreator wraps the free functions in the github package.
@@ -154,7 +155,9 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		if err != nil {
 			stats.Errors = append(stats.Errors, err)
 			a.log.Error("state failed", "state", state.String(), "error", err)
-			a.notifier.Send(notify.ErrorNotification(state.String(), err))
+			if nErr := a.notifier.Send(notify.ErrorNotification(state.String(), err)); nErr != nil {
+				a.log.Warn("failed to send error notification", "error", nErr)
+			}
 			return stats, err
 		}
 
@@ -179,10 +182,12 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	)
 	stats.BudgetSummary = a.claude.Budget().String()
 
-	a.notifier.Send(notify.CycleCompleteNotification(
+	if nErr := a.notifier.Send(notify.CycleCompleteNotification(
 		stats.ItemsFound, stats.ItemsImplemented, stats.PRsCreated,
 		stats.BudgetSummary,
-	))
+	)); nErr != nil {
+		a.log.Warn("failed to send cycle notification", "error", nErr)
+	}
 
 	return stats, nil
 }
@@ -463,9 +468,11 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	// Check budget
 	a.log.Info("checking budget", "spent", a.claude.Budget().Spent(), "max_per_call", a.cfg.Claude.MaxBudgetPerCall, "max_total", a.cfg.Claude.MaxBudgetTotal)
 	if !a.claude.Budget().CanSpend(a.cfg.Claude.MaxBudgetPerCall) {
-		a.notifier.Send(notify.OutOfTokensNotification(
+		if nErr := a.notifier.Send(notify.OutOfTokensNotification(
 			a.claude.Budget().Spent(), a.cfg.Claude.MaxBudgetTotal,
-		))
+		)); nErr != nil {
+			a.log.Warn("failed to send out-of-tokens notification", "error", nErr)
+		}
 		return fmt.Errorf("budget exceeded")
 	}
 
@@ -515,7 +522,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	a.log.Info("running tests", "max_retries", a.cfg.Testing.MaxRetries)
 	testResult, err := a.runTestsWithRetry(ctx, item)
 	if err != nil {
-		a.repo.RevertToClean(ctx)
+		if revertErr := a.repo.RevertToClean(ctx); revertErr != nil {
+			a.log.Error("failed to revert working directory", "error", revertErr)
+		}
 		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
 			a.log.Error("failed to checkout main branch after test failure", "branch", a.cfg.Repo.Branch, "error", coErr)
 		}
@@ -528,7 +537,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 			Category: string(item.Category),
 			Status:   "failed",
 		})
-		a.notifier.Send(notify.StuckNotification(item.Title, item.FilePath, item.Attempts, err.Error()))
+		if nErr := a.notifier.Send(notify.StuckNotification(item.Title, item.FilePath, item.Attempts, err.Error())); nErr != nil {
+			a.log.Warn("failed to send stuck notification", "error", nErr)
+		}
 		return err
 	}
 
@@ -576,7 +587,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		PRLink:   prURL,
 	})
 
-	a.notifier.Send(notify.PRCreatedNotification(item.Title, prURL, item.Description))
+	if nErr := a.notifier.Send(notify.PRCreatedNotification(item.Title, prURL, item.Description)); nErr != nil {
+		a.log.Warn("failed to send PR notification", "error", nErr)
+	}
 
 	// Enable auto-merge if configured
 	if a.cfg.GitHub.AutoMerge {
@@ -609,15 +622,18 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item) (string
 		args = []string{"-c", a.cfg.Testing.OverrideCommand}
 		a.log.Info("using override test command", "command", a.cfg.Testing.OverrideCommand)
 	} else if a.cfg.Testing.AutoDetect {
-		a.log.Info("auto-detecting test framework", "work_dir", workDir)
-		detected := runner.Detect(workDir, a.log)
-		if detected == nil {
+		// Cache detection result to avoid redundant filesystem checks per item.
+		if a.cachedDetect == nil {
+			a.log.Info("auto-detecting test framework", "work_dir", workDir)
+			a.cachedDetect = runner.Detect(workDir, a.log)
+		}
+		if a.cachedDetect == nil {
 			a.log.Warn("no test framework detected, skipping tests")
 			return "no test framework detected", nil
 		}
-		command = detected.Command
-		args = detected.Args
-		a.log.Info("detected test framework", "command", command, "args", args)
+		command = a.cachedDetect.Command
+		args = a.cachedDetect.Args
+		a.log.Info("using detected test framework", "command", command, "args", args)
 	} else {
 		a.log.Info("testing disabled, skipping")
 		return "tests disabled", nil

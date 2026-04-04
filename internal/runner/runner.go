@@ -73,7 +73,8 @@ func (r *Runner) Run(ctx context.Context, workDir, command string, args []string
 	}, nil
 }
 
-// RunOverride runs a test override command string (parsed as shell command).
+// RunOverride runs a test override command string via sh -c.
+// The command is trusted (sourced from config file); no shell escaping is applied.
 func (r *Runner) RunOverride(ctx context.Context, workDir, command string) (*Result, error) {
 	return r.Run(ctx, workDir, "sh", []string{"-c", command})
 }

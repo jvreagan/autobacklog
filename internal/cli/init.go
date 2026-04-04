@@ -90,7 +90,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%s already exists; remove it first or edit it directly", filename)
 	}
 
-	if err := os.WriteFile(filename, []byte(exampleConfig), 0644); err != nil {
+	if err := os.WriteFile(filename, []byte(exampleConfig), 0600); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 

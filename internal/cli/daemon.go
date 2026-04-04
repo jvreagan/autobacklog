@@ -9,6 +9,7 @@ import (
 
 	"github.com/jamesreagan/autobacklog/internal/app"
 	"github.com/jamesreagan/autobacklog/internal/config"
+	"github.com/jamesreagan/autobacklog/internal/logging"
 )
 
 func newDaemonCmd() *cobra.Command {
@@ -24,6 +25,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer logging.Cleanup()
 	defer s.store.Close()
 	defer s.cancel()
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/jamesreagan/autobacklog/internal/logging"
 )
 
 func newRunCmd() *cobra.Command {
@@ -19,6 +21,7 @@ func runOnce(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer logging.Cleanup()
 	defer s.store.Close()
 	defer s.cancel()
 
