@@ -37,6 +37,9 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	if verbose {
 		cfg.Logging.Level = "debug"
 	}
+	if helperMode != "" {
+		cfg.HelperMode = helperMode
+	}
 
 	log, err := logging.Setup(cfg.Logging)
 	if err != nil {

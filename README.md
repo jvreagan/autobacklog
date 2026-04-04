@@ -76,6 +76,7 @@ Key sections:
 | `backlog` | Priority thresholds, max items per cycle, stale cleanup |
 | `testing` | Auto-detection, override command, timeout, retries |
 | `mode` | `oneshot` or `daemon` |
+| `helper_mode` | `buildbacklog` (full pipeline) or `burndown` (implement only) |
 | `daemon` | Cycle interval, quiet hours |
 | `notifications` | SMTP email notifications with event toggles |
 | `logging` | Level, file output, format (text/json) |

@@ -65,6 +65,15 @@ When a PR is created for an item that has a linked issue, the PR body includes `
 
 String: `oneshot` (default) or `daemon`.
 
+## `helper_mode`
+
+String: `buildbacklog` (default) or `burndown`.
+
+- **`buildbacklog`** — full pipeline: review → ingest → evaluate → implement
+- **`burndown`** — skip review and ingest, only implement existing backlog items
+
+Can also be set via `--helper-mode` CLI flag.
+
 ## `daemon`
 
 | Field | Type | Default | Description |

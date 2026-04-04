@@ -9,7 +9,8 @@ type Config struct {
 	Claude        ClaudeConfig        `yaml:"claude"`
 	Backlog       BacklogConfig       `yaml:"backlog"`
 	Testing       TestingConfig       `yaml:"testing"`
-	Mode          string              `yaml:"mode"` // "oneshot" or "daemon"
+	Mode          string              `yaml:"mode"`        // "oneshot" or "daemon"
+	HelperMode    string              `yaml:"helper_mode"` // "buildbacklog" or "burndown"
 	Daemon        DaemonConfig        `yaml:"daemon"`
 	Notifications NotificationsConfig `yaml:"notifications"`
 	Logging       LoggingConfig       `yaml:"logging"`

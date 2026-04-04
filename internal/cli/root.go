@@ -8,9 +8,10 @@ import (
 var Version = "dev"
 
 var (
-	cfgFile string
-	verbose bool
-	dryRun  bool
+	cfgFile    string
+	verbose    bool
+	dryRun     bool
+	helperMode string
 )
 
 // NewRootCmd creates the root command for autobacklog.
@@ -24,6 +25,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "autobacklog.yaml", "config file path")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "run without making changes")
+	rootCmd.PersistentFlags().StringVar(&helperMode, "helper-mode", "", "override helper mode (buildbacklog or burndown)")
 
 	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(newDaemonCmd())

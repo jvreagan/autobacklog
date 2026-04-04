@@ -60,6 +60,7 @@ testing:
 # Execution Mode
 # -----------------------------------------------------------------------------
 mode: "oneshot"                      # "oneshot" (single cycle) or "daemon" (continuous)
+helper_mode: "buildbacklog"          # "buildbacklog" (full pipeline) or "burndown" (skip review, implement existing)
 
 # -----------------------------------------------------------------------------
 # Daemon Settings (only used when mode: "daemon")

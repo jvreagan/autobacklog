@@ -54,6 +54,7 @@ testing:
   max_retries: 3
 
 mode: "oneshot"                    # "oneshot" or "daemon"
+helper_mode: "buildbacklog"        # "buildbacklog" (full pipeline) or "burndown" (skip review, implement existing)
 
 daemon:
   interval: "1h"

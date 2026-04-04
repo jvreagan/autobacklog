@@ -389,6 +389,30 @@ func TestRunCycle_CleanStaleCalled(t *testing.T) {
 	// CleanStale runs after the loop completes — we just verify no panic
 }
 
+func TestRunCycle_Burndown_SkipsReviewAndIngest(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.HelperMode = "burndown"
+	ai := a.claude.(*mockAIClient)
+
+	// In burndown mode, Claude.Run (used by review) should never be called.
+	// Only RunPrint would be called if there were items to implement.
+	// With no items in the backlog, the cycle should complete with zero AI calls.
+
+	stats, err := a.RunCycle(context.Background())
+	if err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if ai.runCalls != 0 {
+		t.Errorf("AI Run called %d times, want 0 (review should be skipped)", ai.runCalls)
+	}
+	if stats.ItemsFound != 0 {
+		t.Errorf("ItemsFound = %d, want 0 (no review in burndown)", stats.ItemsFound)
+	}
+	if stats.ItemsInserted != 0 {
+		t.Errorf("ItemsInserted = %d, want 0 (no ingest in burndown)", stats.ItemsInserted)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // doClone tests
 // ---------------------------------------------------------------------------

@@ -98,6 +98,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Mode == "" {
 		cfg.Mode = "oneshot"
 	}
+	if cfg.HelperMode == "" {
+		cfg.HelperMode = "buildbacklog"
+	}
 	if cfg.Daemon.Interval == 0 {
 		cfg.Daemon.Interval = 1 * time.Hour
 	}
@@ -121,6 +124,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Mode != "oneshot" && cfg.Mode != "daemon" {
 		return fmt.Errorf("mode must be 'oneshot' or 'daemon', got %q", cfg.Mode)
+	}
+	if cfg.HelperMode != "buildbacklog" && cfg.HelperMode != "burndown" {
+		return fmt.Errorf("helper_mode must be 'buildbacklog' or 'burndown', got %q", cfg.HelperMode)
 	}
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 	if !validLevels[strings.ToLower(cfg.Logging.Level)] {

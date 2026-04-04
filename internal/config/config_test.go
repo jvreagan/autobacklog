@@ -58,6 +58,9 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Mode != "oneshot" {
 		t.Errorf("default mode = %q, want %q", cfg.Mode, "oneshot")
 	}
+	if cfg.HelperMode != "buildbacklog" {
+		t.Errorf("default helper_mode = %q, want %q", cfg.HelperMode, "buildbacklog")
+	}
 	if cfg.Testing.MaxRetries != 3 {
 		t.Errorf("default max_retries = %d, want 3", cfg.Testing.MaxRetries)
 	}
@@ -99,13 +102,18 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:    "invalid log level",
-			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", Logging: LoggingConfig{Level: "invalid"}},
+			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog", Logging: LoggingConfig{Level: "invalid"}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid helper_mode",
+			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "invalid", Logging: LoggingConfig{Level: "info"}},
 			wantErr: true,
 		},
 		{
 			name: "notifications enabled without smtp host",
 			cfg: Config{
-				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot",
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
 				Logging:       LoggingConfig{Level: "info"},
 				Notifications: NotificationsConfig{Enabled: true, Recipients: []string{"a@b.com"}},
 			},
@@ -114,7 +122,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "notifications enabled without recipients",
 			cfg: Config{
-				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot",
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
 				Logging:       LoggingConfig{Level: "info"},
 				Notifications: NotificationsConfig{Enabled: true, SMTP: SMTPConfig{Host: "smtp.example.com"}},
 			},
@@ -123,7 +131,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid config",
 			cfg: Config{
-				Repo: RepoConfig{URL: "https://example.com"}, Mode: "daemon",
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "daemon", HelperMode: "burndown",
 				Logging: LoggingConfig{Level: "debug"},
 			},
 			wantErr: false,

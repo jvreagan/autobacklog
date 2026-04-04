@@ -109,7 +109,7 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	stats := &CycleStats{}
 	state := StateClone
 
-	a.log.Info("starting cycle", "dry_run", a.dryRun, "repo", a.cfg.Repo.URL)
+	a.log.Info("starting cycle", "dry_run", a.dryRun, "helper_mode", a.cfg.HelperMode, "repo", a.cfg.Repo.URL)
 
 	for state != StateDone {
 		a.log.Info("entering state", "state", state.String(), "action", state.Description())
@@ -121,8 +121,18 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		case StateImportIssues:
 			err = a.doImportIssues(ctx, stats)
 		case StateReview:
+			if a.cfg.HelperMode == "burndown" {
+				a.log.Info("[burndown] skipping review — implementing existing backlog items")
+				state = state.Next()
+				continue
+			}
 			err = a.doReview(ctx, stats)
 		case StateIngest:
+			if a.cfg.HelperMode == "burndown" {
+				a.log.Info("[burndown] skipping ingest — implementing existing backlog items")
+				state = state.Next()
+				continue
+			}
 			err = a.doIngest(ctx, stats)
 		case StateEvaluateThreshold:
 			err = a.doEvaluateThreshold(ctx, stats)
