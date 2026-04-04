@@ -60,6 +60,15 @@ func (r *Repo) clone(ctx context.Context) error {
 func (r *Repo) pull(ctx context.Context) error {
 	r.log.Info("pulling latest changes", "branch", r.branch)
 
+	// Discard any leftover changes from a previous run — this is autobacklog's
+	// scratch directory, not the user's working copy.
+	if err := r.runGit(ctx, r.workDir, "reset", "--hard"); err != nil {
+		return fmt.Errorf("resetting work dir: %w", err)
+	}
+	if err := r.runGit(ctx, r.workDir, "clean", "-fd"); err != nil {
+		return fmt.Errorf("cleaning work dir: %w", err)
+	}
+
 	if err := r.runGit(ctx, r.workDir, "checkout", r.branch); err != nil {
 		return fmt.Errorf("checking out %s: %w", r.branch, err)
 	}

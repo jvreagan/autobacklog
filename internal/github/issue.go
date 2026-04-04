@@ -19,6 +19,25 @@ type Issue struct {
 	State  string `json:"state"`
 }
 
+// EnsureLabel creates a GitHub label if it doesn't already exist.
+func EnsureLabel(ctx context.Context, workDir, label string, log *slog.Logger) error {
+	log.Info("ensuring GitHub label exists", "label", label)
+
+	cmd := exec.CommandContext(ctx, "gh", "label", "create", label,
+		"--description", "Managed by autobacklog",
+		"--color", "0E8A16",
+		"--force")
+	cmd.Dir = workDir
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("gh label create: %w\n%s", err, stderr.String())
+	}
+	return nil
+}
+
 // CreateIssue creates a GitHub issue using the gh CLI and returns the issue number.
 func CreateIssue(ctx context.Context, workDir, title, body string, labels []string, log *slog.Logger) (int, error) {
 	log.Info("creating GitHub issue", "title", title)

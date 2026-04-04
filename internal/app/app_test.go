@@ -164,12 +164,19 @@ func (m *mockPRCreator) EnableAutoMerge(_ context.Context, _, _ string) error {
 }
 
 type mockIssueManager struct {
-	createIssueNum  int
-	createIssueErr  error
-	listIssues      []gh.Issue
-	listIssuesErr   error
+	createIssueNum   int
+	createIssueErr   error
+	ensureLabelErr   error
+	listIssues       []gh.Issue
+	listIssuesErr    error
 	createIssueCalls int
+	ensureLabelCalls int
 	listIssuesCalls  int
+}
+
+func (m *mockIssueManager) EnsureLabel(_ context.Context, _, _ string) error {
+	m.ensureLabelCalls++
+	return m.ensureLabelErr
 }
 
 func (m *mockIssueManager) CreateIssue(_ context.Context, _, _, _ string, _ []string) (int, error) {

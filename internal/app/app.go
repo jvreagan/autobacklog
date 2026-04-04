@@ -49,6 +49,10 @@ type defaultIssueManager struct {
 	log *slog.Logger
 }
 
+func (d *defaultIssueManager) EnsureLabel(ctx context.Context, workDir, label string) error {
+	return gh.EnsureLabel(ctx, workDir, label, d.log)
+}
+
 func (d *defaultIssueManager) CreateIssue(ctx context.Context, workDir, title, body string, labels []string) (int, error) {
 	return gh.CreateIssue(ctx, workDir, title, body, labels, d.log)
 }
@@ -286,6 +290,12 @@ func (a *App) doIngest(ctx context.Context, stats *CycleStats) error {
 }
 
 func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
+	label := a.cfg.GitHub.IssueLabel
+	if err := a.issueManager.EnsureLabel(ctx, a.repo.WorkDir(), label); err != nil {
+		a.log.Warn("failed to ensure GitHub label exists, skipping issue creation", "label", label, "error", err)
+		return
+	}
+
 	status := backlog.StatusPending
 	zeroIssue := 0
 	items, err := a.store.List(ctx, backlog.ListFilter{
@@ -298,7 +308,6 @@ func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
 		return
 	}
 
-	label := a.cfg.GitHub.IssueLabel
 	for _, item := range items {
 		body := fmt.Sprintf("**%s**\n\n%s\n\n**File:** `%s`\n**Priority:** %s\n**Category:** %s\n\n---\n*Created by [autobacklog](https://github.com/jamesreagan/autobacklog)*",
 			item.Title, item.Description, item.FilePath, item.Priority, item.Category)

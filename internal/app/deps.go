@@ -41,6 +41,7 @@ type PRCreator interface {
 
 // IssueManager abstracts GitHub issue operations for testability.
 type IssueManager interface {
+	EnsureLabel(ctx context.Context, workDir, label string) error
 	CreateIssue(ctx context.Context, workDir, title, body string, labels []string) (int, error)
 	ListIssues(ctx context.Context, workDir, label string) ([]gh.Issue, error)
 }
