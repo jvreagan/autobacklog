@@ -50,9 +50,7 @@ func (r *Repo) clone(ctx context.Context) error {
 		return fmt.Errorf("creating work dir: %w", err)
 	}
 
-	cloneURL := r.authenticatedURL()
-	err := r.run(ctx, "", "git", "clone", "--branch", r.branch, "--single-branch", cloneURL, r.workDir)
-	if err != nil {
+	if err := r.runGit(ctx, "", "clone", "--branch", r.branch, "--single-branch", r.url, r.workDir); err != nil {
 		return fmt.Errorf("cloning repo: %w", err)
 	}
 
@@ -62,33 +60,45 @@ func (r *Repo) clone(ctx context.Context) error {
 func (r *Repo) pull(ctx context.Context) error {
 	r.log.Info("pulling latest changes", "branch", r.branch)
 
-	// Reset to clean state and pull
-	if err := r.run(ctx, r.workDir, "git", "checkout", r.branch); err != nil {
+	if err := r.runGit(ctx, r.workDir, "checkout", r.branch); err != nil {
 		return fmt.Errorf("checking out %s: %w", r.branch, err)
 	}
-	if err := r.run(ctx, r.workDir, "git", "pull", "origin", r.branch); err != nil {
+	if err := r.runGit(ctx, r.workDir, "pull", "origin", r.branch); err != nil {
 		return fmt.Errorf("pulling: %w", err)
 	}
 
 	return nil
 }
 
-// authenticatedURL inserts the PAT into the clone URL for HTTPS auth.
-func (r *Repo) authenticatedURL() string {
-	if r.pat == "" {
-		return r.url
+// runGit runs a git subcommand. When a PAT is configured, credentials are
+// supplied via a transient credential helper that reads GIT_PAT from the
+// process environment, keeping the secret out of the URL, git config, and
+// command-line argument lists.
+func (r *Repo) runGit(ctx context.Context, dir string, args ...string) error {
+	if r.pat != "" {
+		// First entry clears any pre-existing helpers; second installs ours.
+		// The PAT is referenced via $GIT_PAT (set on the child process env),
+		// so it never appears in command arguments or git remote configuration.
+		credHelper := `!f(){ echo "username=x-access-token"; echo "password=$GIT_PAT"; };f`
+		args = append([]string{
+			"-c", "credential.helper=",
+			"-c", "credential.helper=" + credHelper,
+		}, args...)
 	}
-	// https://github.com/user/repo.git → https://<pat>@github.com/user/repo.git
-	if strings.HasPrefix(r.url, "https://") {
-		return strings.Replace(r.url, "https://", "https://"+r.pat+"@", 1)
-	}
-	return r.url
+	return r.run(ctx, dir, "git", args...)
 }
 
 func (r *Repo) run(ctx context.Context, dir string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	cmd.Env = os.Environ()
+	if r.pat != "" {
+		// Pass the PAT via environment variable so it is never visible in
+		// process listings. GIT_TERMINAL_PROMPT=0 prevents git from blocking
+		// on interactive auth prompts when credentials are missing.
+		cmd.Env = append(cmd.Env, "GIT_PAT="+r.pat, "GIT_TERMINAL_PROMPT=0")
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
