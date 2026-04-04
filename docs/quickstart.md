@@ -73,8 +73,10 @@ autobacklog daemon --config autobacklog.yaml
 
 ## 8. Check Status
 
-View the backlog:
+View the backlog for the current repo (scoped by `repo.url` from your config):
 
 ```bash
-autobacklog status
+autobacklog status --config autobacklog.yaml
 ```
+
+Without `--config`, all items across repos are shown.

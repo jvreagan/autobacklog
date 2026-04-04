@@ -16,9 +16,9 @@ CLONE → REVIEW → INGEST → EVALUATE_THRESHOLD → IMPLEMENT → (TEST) → 
 
 **REVIEW** — Invokes Claude Code CLI with a structured review prompt. Claude analyzes the entire codebase and outputs a JSON array of findings with title, description, file path, priority, and category.
 
-**INGEST** — Deduplicates new findings against the existing backlog (matching by title + file path) and inserts new items into SQLite.
+**INGEST** — Deduplicates new findings against the existing backlog for the same repo (matching by title + file path) and inserts new items into SQLite. Each item is tagged with the configured `repo.url` to ensure isolation when multiple repos share a database.
 
-**EVALUATE_THRESHOLD** — Checks whether the backlog meets implementation thresholds:
+**EVALUATE_THRESHOLD** — Checks whether the backlog for the current repo meets implementation thresholds:
 - Any high-priority item → implement immediately
 - Medium-priority count ≥ threshold → implement batch
 - Low-priority count ≥ threshold → implement batch
@@ -81,5 +81,8 @@ Two-level budget control:
 ### Always PR, Never Direct Push
 All changes go through pull requests. The daemon never pushes to the main branch directly. When `auto_merge` is enabled, PRs are set to auto-merge via `gh pr merge --squash --auto` once all required CI checks pass.
 
+### Multi-Tenant Isolation
+All backlog items are tagged with their `repo_url`. Every query — listing, deduplication, threshold evaluation, and stale cleanup — is scoped to the current repo. This means multiple repos can safely share a single SQLite database without cross-contamination.
+
 ### Deduplication
-Items are deduplicated by comparing title similarity + file path against non-terminal items in the backlog. This prevents the same issue from being filed repeatedly across cycles.
+Items are deduplicated by comparing title similarity + file path against non-terminal items in the backlog for the same repo. This prevents the same issue from being filed repeatedly across cycles while allowing identical findings in different repos to coexist.

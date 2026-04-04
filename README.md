@@ -10,8 +10,8 @@ CLONE → REVIEW → INGEST → EVALUATE → IMPLEMENT → TEST → PR → DOCUM
 
 1. **Clone/Pull** the target repo
 2. **Review** the codebase using Claude Code CLI, producing structured findings
-3. **Ingest** findings into a local SQLite backlog, deduplicating against existing items
-4. **Evaluate** whether thresholds are met (high=immediate, medium≥3, low≥5)
+3. **Ingest** findings into a local SQLite backlog, deduplicating per-repo against existing items
+4. **Evaluate** whether per-repo thresholds are met (high=immediate, medium≥3, low≥5)
 5. **Implement** selected items by invoking Claude to make code changes
 6. **Test** — auto-detect and run the test suite; retry up to 3x if tests fail
 7. **PR** — create a GitHub pull request with description and test results

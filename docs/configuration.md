@@ -40,7 +40,7 @@ Falls back to `GITHUB_TOKEN` environment variable if neither is set.
 | `medium_threshold` | int | `3` | Min medium items to trigger batch |
 | `low_threshold` | int | `5` | Min low items to trigger batch |
 | `max_per_cycle` | int | `5` | Max items to implement per cycle |
-| `stale_days` | int | `30` | Days before cleaning terminal items |
+| `stale_days` | int | `30` | Days before cleaning terminal items (scoped to current repo) |
 
 ## `testing`
 
