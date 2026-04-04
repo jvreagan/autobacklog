@@ -20,8 +20,9 @@ type Store interface {
 	Delete(ctx context.Context, id string) error
 
 	// DeleteStale removes items older than the given number of days
-	// that are in a terminal status (done, failed, skipped).
-	DeleteStale(ctx context.Context, days int) (int, error)
+	// that are in a terminal status (done, failed, skipped),
+	// scoped to a specific repo URL.
+	DeleteStale(ctx context.Context, repoURL string, days int) (int, error)
 
 	// Close closes the store.
 	Close() error
@@ -32,5 +33,6 @@ type ListFilter struct {
 	Status   *Status
 	Priority *Priority
 	Category *Category
+	RepoURL  *string
 	Limit    int
 }

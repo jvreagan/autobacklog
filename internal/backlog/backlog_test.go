@@ -48,7 +48,7 @@ func TestManager_IngestAllNew(t *testing.T) {
 		NewItem("Bug 2", "desc", "b.go", PriorityMedium, CategoryBug),
 	}
 
-	n, err := mgr.Ingest(ctx, items)
+	n, err := mgr.Ingest(ctx, "", items)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestManager_IngestDedup(t *testing.T) {
 		NewItem("New issue", "different", "other.go", PriorityLow, CategoryRefactor),
 	}
 
-	n, err := mgr.Ingest(ctx, items)
+	n, err := mgr.Ingest(ctx, "", items)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestManager_IngestSkipsDoneItems(t *testing.T) {
 		NewItem("Fix bug", "new occurrence", "file.go", PriorityHigh, CategoryBug),
 	}
 
-	n, err := mgr.Ingest(ctx, items)
+	n, err := mgr.Ingest(ctx, "", items)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestManager_IngestDifferentFiles(t *testing.T) {
 		NewItem("Fix bug", "desc", "b.go", PriorityHigh, CategoryBug),
 	}
 
-	n, err := mgr.Ingest(ctx, items)
+	n, err := mgr.Ingest(ctx, "", items)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestManager_CleanStale(t *testing.T) {
 	}
 
 	// With recent items, nothing should be cleaned
-	n, err := mgr.CleanStale(ctx, 30)
+	n, err := mgr.CleanStale(ctx, "", 30)
 	if err != nil {
 		t.Fatalf("CleanStale: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestManager_Ingest_EmptySlice(t *testing.T) {
 	mgr, _ := newTestManager(t)
 	ctx := context.Background()
 
-	n, err := mgr.Ingest(ctx, []*Item{})
+	n, err := mgr.Ingest(ctx, "", []*Item{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestManager_Ingest_NilSlice(t *testing.T) {
 	mgr, _ := newTestManager(t)
 	ctx := context.Background()
 
-	n, err := mgr.Ingest(ctx, nil)
+	n, err := mgr.Ingest(ctx, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,5 +172,43 @@ func TestSimilarText_NegativeCase(t *testing.T) {
 	// "Fix bug" vs "Fix typo" — neither contains the other, not equal
 	if similarText("Fix bug", "Fix typo") {
 		t.Error("'Fix bug' and 'Fix typo' should NOT be similar")
+	}
+}
+
+func TestManager_Ingest_CrossRepoDedupIsolation(t *testing.T) {
+	mgr, store := newTestManager(t)
+	ctx := context.Background()
+
+	repoA := "https://github.com/org/repo-a.git"
+	repoB := "https://github.com/org/repo-b.git"
+
+	// Ingest an item into repoA
+	itemsA := []*Item{
+		NewItem("Fix null pointer", "desc", "handler.go", PriorityHigh, CategoryBug),
+	}
+	n, err := mgr.Ingest(ctx, repoA, itemsA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("repoA inserted = %d, want 1", n)
+	}
+
+	// Same title+file into repoB should NOT be deduped
+	itemsB := []*Item{
+		NewItem("Fix null pointer", "desc", "handler.go", PriorityHigh, CategoryBug),
+	}
+	n, err = mgr.Ingest(ctx, repoB, itemsB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("repoB inserted = %d, want 1 (cross-repo should not dedup)", n)
+	}
+
+	// Total items across both repos
+	all, _ := store.List(ctx, ListFilter{})
+	if len(all) != 2 {
+		t.Errorf("total items = %d, want 2", len(all))
 	}
 }

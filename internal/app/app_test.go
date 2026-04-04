@@ -503,6 +503,7 @@ func TestDoEvaluateThreshold_SelectsItems(t *testing.T) {
 
 	// Insert a high-priority item (threshold = 1)
 	item := backlog.NewItem("Critical bug", "fix it", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
 	if err := a.store.Insert(ctx, item); err != nil {
 		t.Fatal(err)
 	}

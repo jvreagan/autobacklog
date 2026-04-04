@@ -198,7 +198,7 @@ func TestSQLiteStore_DeleteStale(t *testing.T) {
 	pending := NewItem("Pending", "", "", PriorityHigh, CategoryBug)
 	store.Insert(ctx, pending)
 
-	n, err := store.DeleteStale(ctx, 30)
+	n, err := store.DeleteStale(ctx, "", 30)
 	if err != nil {
 		t.Fatalf("DeleteStale: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestSQLiteStore_DeleteStale_OnlyTerminalStatuses(t *testing.T) {
 			time.Now().UTC().AddDate(0, 0, -60), item.ID)
 	}
 
-	n, err := store.DeleteStale(ctx, 30)
+	n, err := store.DeleteStale(ctx, "", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,5 +329,71 @@ func TestSQLiteStore_DeleteStale_OnlyTerminalStatuses(t *testing.T) {
 	items, _ := store.List(ctx, ListFilter{})
 	if len(items) != 2 {
 		t.Errorf("remaining items = %d, want 2 (pending + in_progress)", len(items))
+	}
+}
+
+func TestSQLiteStore_MultiTenantIsolation(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	repoA := "https://github.com/org/repo-a.git"
+	repoB := "https://github.com/org/repo-b.git"
+
+	itemA := NewItem("Bug in A", "desc", "a.go", PriorityHigh, CategoryBug)
+	itemA.RepoURL = repoA
+	store.Insert(ctx, itemA)
+
+	itemB := NewItem("Bug in B", "desc", "b.go", PriorityHigh, CategoryBug)
+	itemB.RepoURL = repoB
+	store.Insert(ctx, itemB)
+
+	// List scoped to repoA
+	itemsA, err := store.List(ctx, ListFilter{RepoURL: &repoA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(itemsA) != 1 {
+		t.Errorf("repoA items = %d, want 1", len(itemsA))
+	}
+	if itemsA[0].Title != "Bug in A" {
+		t.Errorf("Title = %q, want 'Bug in A'", itemsA[0].Title)
+	}
+
+	// List scoped to repoB
+	itemsB, err := store.List(ctx, ListFilter{RepoURL: &repoB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(itemsB) != 1 {
+		t.Errorf("repoB items = %d, want 1", len(itemsB))
+	}
+
+	// Unscoped list returns both
+	all, err := store.List(ctx, ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Errorf("all items = %d, want 2", len(all))
+	}
+
+	// DeleteStale scoped to repoA only deletes repoA items
+	itemA.Status = StatusDone
+	store.Update(ctx, itemA)
+	store.db.ExecContext(ctx, `UPDATE backlog_items SET updated_at=? WHERE id=?`,
+		time.Now().UTC().AddDate(0, 0, -60), itemA.ID)
+
+	n, err := store.DeleteStale(ctx, repoA, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("deleted %d, want 1", n)
+	}
+
+	// repoB item should still exist
+	_, err = store.Get(ctx, itemB.ID)
+	if err != nil {
+		t.Error("repoB item should still exist after repoA stale cleanup")
 	}
 }

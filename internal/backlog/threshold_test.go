@@ -11,7 +11,7 @@ func TestEvaluateThreshold_HighPriority(t *testing.T) {
 
 	store.Insert(ctx, NewItem("Critical bug", "desc", "f.go", PriorityHigh, CategoryBug))
 
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 10)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 10)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestEvaluateThreshold_MediumBatch(t *testing.T) {
 		store.Insert(ctx, NewItem("Medium item", "desc", "f.go", PriorityMedium, CategoryRefactor))
 	}
 
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 10)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 10)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestEvaluateThreshold_LowBatch(t *testing.T) {
 		store.Insert(ctx, NewItem("Low item", "desc", "f.go", PriorityLow, CategoryStyle))
 	}
 
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 10)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 10)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestEvaluateThreshold_BelowThreshold(t *testing.T) {
 	store.Insert(ctx, NewItem("Med 1", "", "", PriorityMedium, CategoryRefactor))
 	store.Insert(ctx, NewItem("Med 2", "", "", PriorityMedium, CategoryRefactor))
 
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 10)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 10)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestEvaluateThreshold_MaxPerCycle(t *testing.T) {
 	}
 
 	// Max 3 per cycle
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 3)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 3)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestEvaluateThreshold_EmptyBacklog(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 10)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 10)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestEvaluateThreshold_IgnoresNonPending(t *testing.T) {
 	done.Status = StatusDone
 	store.Insert(ctx, done)
 
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 10)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 10)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestEvaluateThreshold_Combined(t *testing.T) {
 		store.Insert(ctx, NewItem("Medium", "", "", PriorityMedium, CategoryRefactor))
 	}
 
-	result, err := EvaluateThreshold(ctx, store, 1, 3, 5, 10)
+	result, err := EvaluateThreshold(ctx, store, "", 1, 3, 5, 10)
 	if err != nil {
 		t.Fatalf("EvaluateThreshold: %v", err)
 	}

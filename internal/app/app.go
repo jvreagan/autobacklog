@@ -131,7 +131,7 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 
 	// Clean stale items
 	a.log.Info("cleaning stale backlog items", "stale_days", a.cfg.Backlog.StaleDays)
-	a.manager.CleanStale(ctx, a.cfg.Backlog.StaleDays)
+	a.manager.CleanStale(ctx, a.cfg.Repo.URL, a.cfg.Backlog.StaleDays)
 
 	// Send cycle summary
 	a.log.Info("cycle complete",
@@ -200,7 +200,7 @@ func (a *App) doIngest(ctx context.Context, stats *CycleStats) error {
 	}
 
 	a.log.Info("ingesting review items into backlog", "items_to_ingest", len(a.reviewItems))
-	inserted, err := a.manager.Ingest(ctx, a.reviewItems)
+	inserted, err := a.manager.Ingest(ctx, a.cfg.Repo.URL, a.reviewItems)
 	if err != nil {
 		return fmt.Errorf("ingest: %w", err)
 	}
@@ -218,7 +218,7 @@ func (a *App) doEvaluateThreshold(ctx context.Context, stats *CycleStats) error 
 		"low_threshold", a.cfg.Backlog.LowThreshold,
 		"max_per_cycle", a.cfg.Backlog.MaxPerCycle,
 	)
-	result, err := backlog.EvaluateThreshold(ctx, a.store,
+	result, err := backlog.EvaluateThreshold(ctx, a.store, a.cfg.Repo.URL,
 		a.cfg.Backlog.HighThreshold,
 		a.cfg.Backlog.MediumThreshold,
 		a.cfg.Backlog.LowThreshold,

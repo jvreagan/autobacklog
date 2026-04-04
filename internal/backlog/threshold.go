@@ -9,10 +9,11 @@ type ThresholdResult struct {
 	Reason          string
 }
 
-// EvaluateThreshold checks if pending items meet the configured thresholds for implementation.
-func EvaluateThreshold(ctx context.Context, store Store, highThresh, mediumThresh, lowThresh, maxPerCycle int) (*ThresholdResult, error) {
+// EvaluateThreshold checks if pending items meet the configured thresholds for implementation,
+// scoped to a specific repo URL.
+func EvaluateThreshold(ctx context.Context, store Store, repoURL string, highThresh, mediumThresh, lowThresh, maxPerCycle int) (*ThresholdResult, error) {
 	pendingStatus := StatusPending
-	items, err := store.List(ctx, ListFilter{Status: &pendingStatus})
+	items, err := store.List(ctx, ListFilter{Status: &pendingStatus, RepoURL: &repoURL})
 	if err != nil {
 		return nil, err
 	}

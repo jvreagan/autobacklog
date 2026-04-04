@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jamesreagan/autobacklog/internal/backlog"
+	"github.com/jamesreagan/autobacklog/internal/config"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -30,7 +31,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	items, err := store.List(ctx, backlog.ListFilter{})
+	// Scope by repo URL when a config file is available.
+	filter := backlog.ListFilter{}
+	if cfg, err := config.Load(cfgFile); err == nil && cfg.Repo.URL != "" {
+		filter.RepoURL = &cfg.Repo.URL
+	}
+
+	items, err := store.List(ctx, filter)
 	if err != nil {
 		return fmt.Errorf("listing items: %w", err)
 	}

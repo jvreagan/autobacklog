@@ -42,6 +42,7 @@ const (
 // Item represents a single backlog improvement item.
 type Item struct {
 	ID          string    `json:"id"`
+	RepoURL     string    `json:"repo_url"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	FilePath    string    `json:"file_path"`

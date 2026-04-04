@@ -17,16 +17,17 @@ func NewManager(store Store, log *slog.Logger) *Manager {
 	return &Manager{store: store, log: log}
 }
 
-// Ingest takes a slice of new items, deduplicates against existing items, and inserts new ones.
+// Ingest takes a slice of new items, deduplicates against existing items for the given repo, and inserts new ones.
 // Returns the number of new items inserted.
-func (m *Manager) Ingest(ctx context.Context, newItems []*Item) (int, error) {
-	existing, err := m.store.List(ctx, ListFilter{})
+func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) (int, error) {
+	existing, err := m.store.List(ctx, ListFilter{RepoURL: &repoURL})
 	if err != nil {
 		return 0, err
 	}
 
 	inserted := 0
 	for _, item := range newItems {
+		item.RepoURL = repoURL
 		if m.isDuplicate(item, existing) {
 			m.log.Debug("skipping duplicate item", "title", item.Title, "file", item.FilePath)
 			continue
@@ -69,9 +70,9 @@ func similarText(a, b string) bool {
 	return false
 }
 
-// CleanStale removes stale items from the store.
-func (m *Manager) CleanStale(ctx context.Context, days int) (int, error) {
-	n, err := m.store.DeleteStale(ctx, days)
+// CleanStale removes stale items from the store, scoped to a specific repo.
+func (m *Manager) CleanStale(ctx context.Context, repoURL string, days int) (int, error) {
+	n, err := m.store.DeleteStale(ctx, repoURL, days)
 	if err != nil {
 		return 0, err
 	}
