@@ -139,7 +139,7 @@ func TestCloneOrPull_Pull(t *testing.T) {
 	// Push a new commit to the bare repo via a separate working copy so the
 	// main clone can pull it.
 	staging := filepath.Join(t.TempDir(), "staging2")
-	runCmd(t, "", "git", "clone", bare, staging)
+	runCmd(t, "", "git", "clone", "--branch", "main", bare, staging)
 	runCmd(t, staging, "git", "config", "user.email", "test@test.com")
 	runCmd(t, staging, "git", "config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(staging, "extra.txt"), []byte("extra\n"), 0644); err != nil {
