@@ -35,7 +35,6 @@ CREATE TABLE IF NOT EXISTS backlog_items (
 
 CREATE INDEX IF NOT EXISTS idx_status ON backlog_items(status);
 CREATE INDEX IF NOT EXISTS idx_priority ON backlog_items(priority);
-CREATE INDEX IF NOT EXISTS idx_repo_url ON backlog_items(repo_url);
 `
 
 const migrateRepoURLSQL = `
