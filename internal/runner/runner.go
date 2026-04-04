@@ -38,9 +38,11 @@ func (r *Runner) Run(ctx context.Context, workDir, command string, args []string
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workDir
 
-	var combined bytes.Buffer
-	cmd.Stdout = &combined
-	cmd.Stderr = &combined
+	// Cap combined output at 50 MB to prevent OOM on verbose test suites.
+	const maxTestOutput = 50 * 1024 * 1024
+	combined := &limitedBuffer{limit: maxTestOutput}
+	cmd.Stdout = combined
+	cmd.Stderr = combined
 
 	err := cmd.Run()
 	elapsed := time.Since(start)
@@ -74,4 +76,28 @@ func (r *Runner) Run(ctx context.Context, workDir, command string, args []string
 // RunOverride runs a test override command string (parsed as shell command).
 func (r *Runner) RunOverride(ctx context.Context, workDir, command string) (*Result, error) {
 	return r.Run(ctx, workDir, "sh", []string{"-c", command})
+}
+
+// limitedBuffer is a bytes.Buffer that silently discards writes beyond the limit.
+type limitedBuffer struct {
+	buf     bytes.Buffer
+	limit   int
+	written int
+}
+
+func (lb *limitedBuffer) Write(p []byte) (int, error) {
+	remaining := lb.limit - lb.written
+	if remaining <= 0 {
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+	}
+	n, err := lb.buf.Write(p)
+	lb.written += n
+	return n, err
+}
+
+func (lb *limitedBuffer) String() string {
+	return lb.buf.String()
 }

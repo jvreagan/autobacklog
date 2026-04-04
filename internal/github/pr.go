@@ -32,6 +32,7 @@ func CreatePR(ctx context.Context, workDir string, req PRRequest, log *slog.Logg
 
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = workDir
+	cmd.Env = ghEnv()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -53,6 +54,7 @@ func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slo
 
 	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", prURL, "--squash", "--auto")
 	cmd.Dir = workDir
+	cmd.Env = ghEnv()
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

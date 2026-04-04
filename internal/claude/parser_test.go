@@ -226,3 +226,272 @@ func TestParseTestDetection_WithCommentary(t *testing.T) {
 		t.Errorf("Command = %q", det.Command)
 	}
 }
+
+// --- Edge-case tests for issue #61 ---
+
+func TestExtractJSON_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "whitespace only",
+			input: "   \n\t  \n  ",
+			want:  "",
+		},
+		{
+			name:  "plain text no JSON",
+			input: "This is just plain text with no JSON at all.",
+			want:  "This is just plain text with no JSON at all.",
+		},
+		{
+			name:  "plain text with brackets in prose",
+			input: "See section [A] for details on the {config} option.",
+			want:  "[A]",
+		},
+		{
+			name:  "nested arrays inside JSON array",
+			input: `[{"tags":["a","b"],"matrix":[[1,2],[3,4]]}]`,
+			want:  `[{"tags":["a","b"],"matrix":[[1,2],[3,4]]}]`,
+		},
+		{
+			name:  "nested objects inside JSON array",
+			input: `[{"meta":{"nested":{"deep":"value"}},"title":"bug"}]`,
+			want:  `[{"meta":{"nested":{"deep":"value"}},"title":"bug"}]`,
+		},
+		{
+			name:  "nested with surrounding text",
+			input: "Findings:\n[{\"items\":[{\"sub\":1},{\"sub\":2}]}]\nDone.",
+			want:  `[{"items":[{"sub":1},{"sub":2}]}]`,
+		},
+		{
+			name:  "multiple JSON arrays picks first balanced one",
+			input: "First: [{\"a\":1}] and second: [{\"b\":2},{\"c\":3}] end.",
+			want:  `[{"a":1}]`,
+		},
+		{
+			name:  "multiple arrays first is empty",
+			input: "Start: [] then [{\"real\":true}] end.",
+			want:  "[]",
+		},
+		{
+			name:  "brackets inside quoted strings are ignored",
+			input: `[{"title":"fix [bug] in {config}","desc":"handle ]]]"}]`,
+			want:  `[{"title":"fix [bug] in {config}","desc":"handle ]]]"}]`,
+		},
+		{
+			name:  "escaped quotes inside strings",
+			input: `[{"title":"a \"quoted\" value"}]`,
+			want:  `[{"title":"a \"quoted\" value"}]`,
+		},
+		{
+			name:  "unbalanced open bracket returns empty and falls through",
+			input: `Some text [{"a":1 more text`,
+			want:  `Some text [{"a":1 more text`,
+		},
+		{
+			name:  "object preferred when no array present",
+			input: `Commentary: {"key":"val"} done`,
+			want:  `{"key":"val"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractJSON(tt.input)
+			if got != tt.want {
+				t.Errorf("extractJSON() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseReviewOutput_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantItems int
+		wantErr   bool
+		check     func(t *testing.T, items []*backlog.Item, cost float64)
+	}{
+		{
+			name:    "empty output",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "whitespace only output",
+			input:   "   \n\t  ",
+			wantErr: true,
+		},
+		{
+			name:    "plain text no JSON",
+			input:   "I found no issues in the codebase. Everything looks great!",
+			wantErr: true,
+		},
+		{
+			name:      "findings with nested arrays in values",
+			input:     `[{"title":"Complex finding","description":"Found in [multiple] areas","file_path":"main.go","line_number":10,"priority":"high","category":"bug"}]`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Title != "Complex finding" {
+					t.Errorf("Title = %q, want %q", items[0].Title, "Complex finding")
+				}
+				if items[0].Description != "Found in [multiple] areas" {
+					t.Errorf("Description = %q", items[0].Description)
+				}
+				if items[0].Priority != backlog.PriorityHigh {
+					t.Errorf("Priority = %q, want %q", items[0].Priority, backlog.PriorityHigh)
+				}
+			},
+		},
+		{
+			name: "findings with nested objects",
+			input: `[{"title":"Nested","description":"desc","file_path":"a.go","line_number":1,"priority":"low","category":"bug"},` +
+				`{"title":"Also nested","description":"desc2","file_path":"b.go","line_number":2,"priority":"medium","category":"security"}]`,
+			wantItems: 2,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Title != "Nested" {
+					t.Errorf("items[0].Title = %q", items[0].Title)
+				}
+				if items[1].Title != "Also nested" {
+					t.Errorf("items[1].Title = %q", items[1].Title)
+				}
+				if items[1].Category != backlog.CategorySecurity {
+					t.Errorf("items[1].Category = %q", items[1].Category)
+				}
+			},
+		},
+		{
+			name:    "malformed JSON inside valid ClaudeResponse envelope",
+			input:   `{"result":"[{\"title\":\"bug\", invalid json here}]","cost_usd":{"input":0.01,"output":0.02,"total":0.03}}`,
+			wantErr: true,
+		},
+		{
+			name:    "ClaudeResponse with empty result field",
+			input:   `{"result":"","cost_usd":{"input":0.01,"output":0.02,"total":0.03}}`,
+			wantErr: true,
+		},
+		{
+			name:      "unknown priority normalizes to low",
+			input:     `[{"title":"Unknown pri","description":"desc","file_path":"x.go","line_number":1,"priority":"critical","category":"bug"}]`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Priority != backlog.PriorityLow {
+					t.Errorf("Priority = %q, want %q (default for unknown)", items[0].Priority, backlog.PriorityLow)
+				}
+			},
+		},
+		{
+			name:      "unknown category normalizes to refactor",
+			input:     `[{"title":"Unknown cat","description":"desc","file_path":"x.go","line_number":1,"priority":"high","category":"feature"}]`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Category != backlog.CategoryRefactor {
+					t.Errorf("Category = %q, want %q (default for unknown)", items[0].Category, backlog.CategoryRefactor)
+				}
+			},
+		},
+		{
+			name:      "empty priority and category normalize to defaults",
+			input:     `[{"title":"Empty fields","description":"desc","file_path":"x.go","line_number":1,"priority":"","category":""}]`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Priority != backlog.PriorityLow {
+					t.Errorf("Priority = %q, want %q", items[0].Priority, backlog.PriorityLow)
+				}
+				if items[0].Category != backlog.CategoryRefactor {
+					t.Errorf("Category = %q, want %q", items[0].Category, backlog.CategoryRefactor)
+				}
+			},
+		},
+		{
+			name:      "missing priority and category fields normalize to defaults",
+			input:     `[{"title":"No pri/cat","description":"desc","file_path":"x.go","line_number":1}]`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Priority != backlog.PriorityLow {
+					t.Errorf("Priority = %q, want %q", items[0].Priority, backlog.PriorityLow)
+				}
+				if items[0].Category != backlog.CategoryRefactor {
+					t.Errorf("Category = %q, want %q", items[0].Category, backlog.CategoryRefactor)
+				}
+			},
+		},
+		{
+			name: "multiple JSON arrays in text picks first",
+			input: `Here are the findings:
+[{"title":"First","description":"d","file_path":"a.go","line_number":1,"priority":"high","category":"bug"}]
+And also:
+[{"title":"Second","description":"d","file_path":"b.go","line_number":2,"priority":"low","category":"docs"}]`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Title != "First" {
+					t.Errorf("Title = %q, want %q (should pick first array)", items[0].Title, "First")
+				}
+			},
+		},
+		{
+			name: "multiple arrays first is empty second has items",
+			input: `No findings: []
+Actually: [{"title":"Oops","description":"d","file_path":"a.go","line_number":1,"priority":"high","category":"bug"}]`,
+			wantItems: 0,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				// First balanced array is [], so we get zero items
+			},
+		},
+		{
+			name: "ClaudeResponse with valid result containing multiple arrays picks first",
+			input: `{"result":"[{\"title\":\"First\",\"description\":\"d\",\"file_path\":\"a.go\",\"line_number\":1,\"priority\":\"high\",\"category\":\"bug\"}]\nAlso: [{\"title\":\"Second\",\"description\":\"d\",\"file_path\":\"b.go\",\"line_number\":2,\"priority\":\"low\",\"category\":\"docs\"}]","cost_usd":{"input":0.01,"output":0.02,"total":0.03}}`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Title != "First" {
+					t.Errorf("Title = %q, want %q", items[0].Title, "First")
+				}
+				if cost != 0.03 {
+					t.Errorf("cost = %f, want 0.03", cost)
+				}
+			},
+		},
+		{
+			name:      "priority with unusual casing and whitespace",
+			input:     `[{"title":"Weird pri","description":"d","file_path":"x.go","line_number":1,"priority":"  HIGH  ","category":"  BUG  "}]`,
+			wantItems: 1,
+			check: func(t *testing.T, items []*backlog.Item, cost float64) {
+				if items[0].Priority != backlog.PriorityHigh {
+					t.Errorf("Priority = %q, want %q", items[0].Priority, backlog.PriorityHigh)
+				}
+				if items[0].Category != backlog.CategoryBug {
+					t.Errorf("Category = %q, want %q", items[0].Category, backlog.CategoryBug)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items, cost, err := ParseReviewOutput(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (items=%d)", len(items))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(items) != tt.wantItems {
+				t.Fatalf("len(items) = %d, want %d", len(items), tt.wantItems)
+			}
+			if tt.check != nil {
+				tt.check(t, items, cost)
+			}
+		})
+	}
+}

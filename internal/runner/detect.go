@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bufio"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -75,9 +76,18 @@ func hasNpmTestScript(dir string) bool {
 	if err != nil {
 		return false
 	}
-	// Simple heuristic: look for "test" in scripts section
-	content := string(data)
-	return strings.Contains(content, `"test"`) && !strings.Contains(content, `"test": "echo`)
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false
+	}
+	testCmd, ok := pkg.Scripts["test"]
+	if !ok {
+		return false
+	}
+	// Exclude npm's default placeholder
+	return !strings.HasPrefix(testCmd, "echo ")
 }
 
 func hasMakeTarget(dir, target string) bool {

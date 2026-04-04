@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jamesreagan/autobacklog/internal/backlog"
 	"github.com/jamesreagan/autobacklog/internal/claude"
@@ -163,7 +164,9 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 
 	// Clean stale items
 	a.log.Info("cleaning stale backlog items", "stale_days", a.cfg.Backlog.StaleDays)
-	a.manager.CleanStale(ctx, a.cfg.Repo.URL, a.cfg.Backlog.StaleDays)
+	if _, err := a.manager.CleanStale(ctx, a.cfg.Repo.URL, a.cfg.Backlog.StaleDays); err != nil {
+		a.log.Warn("clean stale failed", "error", err)
+	}
 
 	// Send cycle summary
 	a.log.Info("cycle complete",
@@ -211,36 +214,81 @@ func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
 		return nil
 	}
 
-	for _, issue := range issues {
-		// Check if already imported
-		issueNum := issue.Number
-		existing, err := a.store.List(ctx, backlog.ListFilter{
-			IssueNumber: &issueNum,
-			RepoURL:     &a.cfg.Repo.URL,
-		})
-		if err != nil {
-			a.log.Warn("failed to check existing issue", "issue_number", issueNum, "error", err)
-			continue
+	// Pre-fetch existing issue numbers to avoid N+1 queries.
+	existingItems, err := a.store.List(ctx, backlog.ListFilter{RepoURL: &a.cfg.Repo.URL})
+	if err != nil {
+		a.log.Warn("failed to list existing items, continuing", "error", err)
+		return nil
+	}
+	importedNums := make(map[int]bool, len(existingItems))
+	for _, item := range existingItems {
+		if item.IssueNumber > 0 {
+			importedNums[item.IssueNumber] = true
 		}
-		if len(existing) > 0 {
-			a.log.Info("issue already imported, skipping", "issue_number", issueNum, "title", issue.Title)
+	}
+
+	var importFailures int
+	for _, issue := range issues {
+		if importedNums[issue.Number] {
+			a.log.Info("issue already imported, skipping", "issue_number", issue.Number, "title", issue.Title)
 			continue
 		}
 
-		item := backlog.NewItem(issue.Title, issue.Body, "", backlog.PriorityMedium, backlog.CategoryRefactor)
+		priority, category := inferFromLabels(issue.LabelNames())
+		item := backlog.NewItem(issue.Title, issue.Body, "", priority, category)
 		item.RepoURL = a.cfg.Repo.URL
-		item.IssueNumber = issueNum
+		item.IssueNumber = issue.Number
 
 		if err := a.store.Insert(ctx, item); err != nil {
-			a.log.Warn("failed to import issue", "issue_number", issueNum, "error", err)
+			a.log.Warn("failed to import issue", "issue_number", issue.Number, "error", err)
+			importFailures++
 			continue
 		}
 
+		importedNums[issue.Number] = true
 		stats.IssuesImported++
-		a.log.Info("imported issue", "issue_number", issueNum, "title", issue.Title)
+		a.log.Info("imported issue", "issue_number", issue.Number, "title", issue.Title)
+	}
+
+	if importFailures > 0 {
+		a.log.Warn("some issue imports failed", "failures", importFailures, "imported", stats.IssuesImported)
 	}
 
 	return nil
+}
+
+// inferFromLabels derives priority and category from GitHub issue labels.
+// Falls back to PriorityMedium and CategoryRefactor when no matching labels are found.
+func inferFromLabels(labels []string) (backlog.Priority, backlog.Category) {
+	priority := backlog.PriorityMedium
+	category := backlog.CategoryRefactor
+
+	for _, l := range labels {
+		l = strings.ToLower(l)
+		switch {
+		// Priority labels (e.g., "priority:high", "P1", "critical")
+		case strings.Contains(l, "critical") || l == "p0" || l == "p1" || strings.HasSuffix(l, ":high") || l == "high":
+			priority = backlog.PriorityHigh
+		case l == "p3" || l == "p4" || strings.HasSuffix(l, ":low") || l == "low":
+			priority = backlog.PriorityLow
+
+		// Category labels
+		case l == "bug" || strings.Contains(l, "bugfix"):
+			category = backlog.CategoryBug
+		case l == "security":
+			category = backlog.CategorySecurity
+		case l == "performance" || l == "perf":
+			category = backlog.CategoryPerformance
+		case l == "test" || l == "testing" || l == "tests":
+			category = backlog.CategoryTest
+		case l == "documentation" || l == "docs":
+			category = backlog.CategoryDocs
+		case l == "style" || l == "linting":
+			category = backlog.CategoryStyle
+		}
+	}
+
+	return priority, category
 }
 
 func (a *App) doReview(ctx context.Context, stats *CycleStats) error {
@@ -299,6 +347,9 @@ func (a *App) doIngest(ctx context.Context, stats *CycleStats) error {
 	return nil
 }
 
+// createIssuesForNewItems creates GitHub issues for all pending items that don't
+// yet have an associated issue number. This intentionally includes items from
+// previous cycles whose issue creation failed, acting as an automatic retry.
 func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
 	label := a.cfg.GitHub.IssueLabel
 	if err := a.issueManager.EnsureLabel(ctx, a.repo.WorkDir(), label); err != nil {

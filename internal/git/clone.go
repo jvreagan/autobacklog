@@ -114,10 +114,16 @@ func (r *Repo) run(ctx context.Context, dir string, name string, args ...string)
 
 	if err := cmd.Run(); err != nil {
 		argStr := strings.Join(args, " ")
+		errStr := stderr.String()
 		if r.pat != "" {
+			// Redact both raw and URL-encoded forms of the PAT
 			argStr = strings.ReplaceAll(argStr, r.pat, "[REDACTED]")
+			errStr = strings.ReplaceAll(errStr, r.pat, "[REDACTED]")
+			encoded := strings.ReplaceAll(r.pat, "/", "%2F")
+			argStr = strings.ReplaceAll(argStr, encoded, "[REDACTED]")
+			errStr = strings.ReplaceAll(errStr, encoded, "[REDACTED]")
 		}
-		return fmt.Errorf("%s %s: %w\n%s", name, argStr, err, stderr.String())
+		return fmt.Errorf("%s %s: %w\n%s", name, argStr, err, errStr)
 	}
 	return nil
 }

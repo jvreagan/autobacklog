@@ -43,7 +43,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(items) == 0 {
-		fmt.Println("Backlog is empty.")
+		cmd.Println("Backlog is empty.")
 		return nil
 	}
 
@@ -53,8 +53,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		counts[item.Status]++
 	}
 
-	fmt.Printf("Backlog: %d items total\n", len(items))
-	fmt.Printf("  Pending: %d  In Progress: %d  Done: %d  Failed: %d  Skipped: %d\n\n",
+	cmd.Printf("Backlog: %d items total\n", len(items))
+	cmd.Printf("  Pending: %d  In Progress: %d  Done: %d  Failed: %d  Skipped: %d\n\n",
 		counts[backlog.StatusPending],
 		counts[backlog.StatusInProgress],
 		counts[backlog.StatusDone],
@@ -62,7 +62,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		counts[backlog.StatusSkipped],
 	)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "PRIORITY\tCATEGORY\tSTATUS\tTITLE\tFILE")
 	for _, item := range items {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",

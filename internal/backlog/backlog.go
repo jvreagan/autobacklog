@@ -25,17 +25,39 @@ func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) 
 		return 0, err
 	}
 
+	// Build a lookup map keyed on normalized "title|filepath" for O(1) dedup.
+	type dedupKey struct{ title, file string }
+	seen := make(map[dedupKey]bool, len(existing))
+	var active []*Item
+	for _, ex := range existing {
+		if ex.Status == StatusDone || ex.Status == StatusSkipped {
+			continue
+		}
+		seen[dedupKey{strings.ToLower(strings.TrimSpace(ex.Title)), ex.FilePath}] = true
+		active = append(active, ex)
+	}
+
 	inserted := 0
 	for _, item := range newItems {
 		item.RepoURL = repoURL
-		if m.isDuplicate(item, existing) {
-			m.log.Debug("skipping duplicate item", "title", item.Title, "file", item.FilePath)
+
+		key := dedupKey{strings.ToLower(strings.TrimSpace(item.Title)), item.FilePath}
+		if seen[key] {
+			m.log.Debug("skipping duplicate item (exact match)", "title", item.Title, "file", item.FilePath)
 			continue
 		}
+
+		// Fuzzy check: only use substring containment for titles of meaningful length
+		if m.isFuzzyDuplicate(item, active) {
+			m.log.Debug("skipping duplicate item (fuzzy match)", "title", item.Title, "file", item.FilePath)
+			continue
+		}
+
 		if err := m.store.Insert(ctx, item); err != nil {
 			return inserted, err
 		}
-		existing = append(existing, item)
+		seen[key] = true
+		active = append(active, item)
 		inserted++
 		m.log.Info("ingested backlog item", "title", item.Title, "priority", item.Priority, "category", item.Category)
 	}
@@ -43,13 +65,23 @@ func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) 
 	return inserted, nil
 }
 
-// isDuplicate checks if a new item is similar to any existing non-terminal item.
-func (m *Manager) isDuplicate(newItem *Item, existing []*Item) bool {
+// isFuzzyDuplicate checks if item is similar to any existing item via substring containment.
+// Only applies when both titles are at least 20 characters to avoid overly aggressive dedup
+// (e.g., "Fix bug" matching "Fix bug in authentication handler").
+func (m *Manager) isFuzzyDuplicate(newItem *Item, existing []*Item) bool {
+	newTitle := strings.ToLower(strings.TrimSpace(newItem.Title))
+	if len(newTitle) < 20 {
+		return false
+	}
 	for _, ex := range existing {
-		if ex.Status == StatusDone || ex.Status == StatusSkipped {
+		if newItem.FilePath != ex.FilePath {
 			continue
 		}
-		if similarText(newItem.Title, ex.Title) && newItem.FilePath == ex.FilePath {
+		exTitle := strings.ToLower(strings.TrimSpace(ex.Title))
+		if len(exTitle) < 20 {
+			continue
+		}
+		if strings.Contains(newTitle, exTitle) || strings.Contains(exTitle, newTitle) {
 			return true
 		}
 	}
@@ -57,15 +89,19 @@ func (m *Manager) isDuplicate(newItem *Item, existing []*Item) bool {
 }
 
 // similarText checks if two strings are similar enough to be considered duplicates.
+// Uses exact normalized equality only — substring matching is handled separately
+// with a minimum length requirement to avoid false positives.
 func similarText(a, b string) bool {
 	a = strings.ToLower(strings.TrimSpace(a))
 	b = strings.ToLower(strings.TrimSpace(b))
 	if a == b {
 		return true
 	}
-	// Check if one contains the other
-	if strings.Contains(a, b) || strings.Contains(b, a) {
-		return true
+	// Substring containment only for titles of meaningful length
+	if len(a) >= 20 && len(b) >= 20 {
+		if strings.Contains(a, b) || strings.Contains(b, a) {
+			return true
+		}
 	}
 	return false
 }

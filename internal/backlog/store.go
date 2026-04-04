@@ -3,6 +3,10 @@ package backlog
 import "context"
 
 // Store is the persistence interface for backlog items.
+//
+// Note: individual operations are not wrapped in transactions. Multi-step
+// operations (e.g., Manager.Ingest inserting multiple items) are not atomic.
+// If atomicity is needed in the future, add a RunInTx method.
 type Store interface {
 	// Insert adds a new item to the store.
 	Insert(ctx context.Context, item *Item) error

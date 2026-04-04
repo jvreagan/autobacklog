@@ -15,12 +15,13 @@ const (
 	StateIngest
 	StateEvaluateThreshold
 	StateImplement
-	StateTest
-	StatePR
+	StateTest  // pass-through: tests run inline during StateImplement
+	StatePR    // pass-through: PRs created inline during StateImplement
 	StateDocument
 	StateDone
 )
 
+// String returns the string representation of the state.
 func (s State) String() string {
 	switch s {
 	case StateClone:

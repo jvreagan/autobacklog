@@ -16,76 +16,86 @@ type Config struct {
 	Logging       LoggingConfig       `yaml:"logging"`
 }
 
+// RepoConfig defines the target repository settings.
 type RepoConfig struct {
-	URL            string `yaml:"url"`
-	Branch         string `yaml:"branch"`
-	WorkDir        string `yaml:"work_dir"`
-	PRBranchPrefix string `yaml:"pr_branch_prefix"`
+	URL            string `yaml:"url"`              // Git clone URL (HTTPS), required
+	Branch         string `yaml:"branch"`           // Target branch, default "main"
+	WorkDir        string `yaml:"work_dir"`         // Local clone directory, default "/tmp/autobacklog"
+	PRBranchPrefix string `yaml:"pr_branch_prefix"` // Prefix for PR branches, default "autobacklog"
 }
 
+// GitHubConfig holds GitHub authentication and integration settings.
 type GitHubConfig struct {
-	PAT          string `yaml:"pat"`
-	PATFile      string `yaml:"pat_file"`
-	AutoMerge    bool   `yaml:"auto_merge"`
-	CreateIssues bool   `yaml:"create_issues"`
-	IssueLabel   string `yaml:"issue_label"`
+	PAT          string `yaml:"pat"`           // GitHub PAT (inline)
+	PATFile      string `yaml:"pat_file"`      // Path to file containing PAT
+	AutoMerge    bool   `yaml:"auto_merge"`    // Enable auto-merge after CI passes
+	CreateIssues bool   `yaml:"create_issues"` // Create GitHub issues for new backlog items
+	IssueLabel   string `yaml:"issue_label"`   // Label for importing/creating issues, default "autobacklog"
 }
 
+// ClaudeConfig configures the Claude Code CLI integration.
 type ClaudeConfig struct {
-	Binary                    string        `yaml:"binary"`
-	Model                     string        `yaml:"model"`
-	MaxBudgetPerCall          float64       `yaml:"max_budget_per_call"`
-	MaxBudgetTotal            float64       `yaml:"max_budget_total"`
-	Timeout                   time.Duration `yaml:"timeout"`
-	DangerouslySkipPermissions bool         `yaml:"dangerously_skip_permissions"`
+	Binary                    string        `yaml:"binary"`                      // Path to claude CLI binary, default "claude"
+	Model                     string        `yaml:"model"`                       // Model to use (sonnet, opus, haiku), default "sonnet"
+	MaxBudgetPerCall          float64       `yaml:"max_budget_per_call"`         // USD budget cap per CLI invocation, default 10.00
+	MaxBudgetTotal            float64       `yaml:"max_budget_total"`            // USD total budget across all invocations, default 100.00
+	Timeout                   time.Duration `yaml:"timeout"`                     // Timeout per invocation, default 10m
+	DangerouslySkipPermissions bool         `yaml:"dangerously_skip_permissions"` // Pass --dangerously-skip-permissions to Claude CLI
 }
 
+// BacklogConfig controls backlog prioritization and lifecycle.
 type BacklogConfig struct {
-	HighThreshold   int `yaml:"high_threshold"`
-	MediumThreshold int `yaml:"medium_threshold"`
-	LowThreshold    int `yaml:"low_threshold"`
-	MaxPerCycle     int `yaml:"max_per_cycle"`
-	StaleDays       int `yaml:"stale_days"`
+	HighThreshold   int `yaml:"high_threshold"`   // Min high items to trigger implementation, default 1
+	MediumThreshold int `yaml:"medium_threshold"` // Min medium items to trigger batch, default 3
+	LowThreshold    int `yaml:"low_threshold"`    // Min low items to trigger batch, default 5
+	MaxPerCycle     int `yaml:"max_per_cycle"`     // Max items to implement per cycle, default 5
+	StaleDays       int `yaml:"stale_days"`        // Days before cleaning terminal items, default 30
 }
 
+// TestingConfig controls test detection and execution.
 type TestingConfig struct {
-	AutoDetect      bool          `yaml:"auto_detect"`
-	OverrideCommand string        `yaml:"override_command"`
-	Timeout         time.Duration `yaml:"timeout"`
-	MaxRetries      int           `yaml:"max_retries"`
+	AutoDetect      bool          `yaml:"auto_detect"`      // Auto-detect test framework, default true
+	OverrideCommand string        `yaml:"override_command"` // Override test command (bypasses auto-detection)
+	Timeout         time.Duration `yaml:"timeout"`          // Test execution timeout, default 5m
+	MaxRetries      int           `yaml:"max_retries"`      // Max fix attempts when tests fail, default 3
 }
 
+// DaemonConfig controls the continuous daemon loop.
 type DaemonConfig struct {
-	Interval   time.Duration `yaml:"interval"`
-	QuietStart string        `yaml:"quiet_start"` // "HH:MM" format
-	QuietEnd   string        `yaml:"quiet_end"`
+	Interval   time.Duration `yaml:"interval"`    // Time between cycles, default 1h
+	QuietStart string        `yaml:"quiet_start"` // Start of quiet hours, "HH:MM" format
+	QuietEnd   string        `yaml:"quiet_end"`   // End of quiet hours, "HH:MM" format
 }
 
+// NotificationsConfig controls email notification delivery.
 type NotificationsConfig struct {
-	Enabled    bool           `yaml:"enabled"`
-	SMTP       SMTPConfig     `yaml:"smtp"`
-	Recipients []string       `yaml:"recipients"`
-	Events     EventsConfig   `yaml:"events"`
+	Enabled    bool           `yaml:"enabled"`    // Enable email notifications
+	SMTP       SMTPConfig     `yaml:"smtp"`       // SMTP server settings
+	Recipients []string       `yaml:"recipients"` // Recipient email addresses
+	Events     EventsConfig   `yaml:"events"`     // Per-event toggles
 }
 
+// SMTPConfig holds SMTP connection settings for notifications.
 type SMTPConfig struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-	From     string `yaml:"from"`
+	Host     string `yaml:"host"`     // SMTP server hostname
+	Port     int    `yaml:"port"`     // SMTP port, default 587
+	Username string `yaml:"username"` // SMTP username
+	Password string `yaml:"password"` // SMTP password
+	From     string `yaml:"from"`     // Sender email address
 }
 
+// EventsConfig toggles individual notification events.
 type EventsConfig struct {
-	OnCycleComplete bool `yaml:"on_cycle_complete"`
-	OnStuck         bool `yaml:"on_stuck"`
-	OnOutOfTokens   bool `yaml:"on_out_of_tokens"`
-	OnPRCreated     bool `yaml:"on_pr_created"`
-	OnError         bool `yaml:"on_error"`
+	OnCycleComplete bool `yaml:"on_cycle_complete"` // Notify on cycle completion
+	OnStuck         bool `yaml:"on_stuck"`          // Notify when item is stuck
+	OnOutOfTokens   bool `yaml:"on_out_of_tokens"`  // Notify when budget exceeded
+	OnPRCreated     bool `yaml:"on_pr_created"`     // Notify when PR is created
+	OnError         bool `yaml:"on_error"`          // Notify on unexpected errors
 }
 
+// LoggingConfig controls structured logging output.
 type LoggingConfig struct {
-	Level  string `yaml:"level"`  // "debug", "info", "warn", "error"
-	File   string `yaml:"file"`
-	Format string `yaml:"format"` // "text" or "json"
+	Level  string `yaml:"level"`  // Log level: "debug", "info", "warn", "error"; default "info"
+	File   string `yaml:"file"`   // Optional log file path (also logs to stderr)
+	Format string `yaml:"format"` // Output format: "text" or "json"; default "text"
 }

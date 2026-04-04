@@ -1,21 +1,9 @@
 package cli
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"syscall"
 
 	"github.com/spf13/cobra"
-
-	"github.com/jamesreagan/autobacklog/internal/app"
-	"github.com/jamesreagan/autobacklog/internal/backlog"
-	"github.com/jamesreagan/autobacklog/internal/config"
-	gh "github.com/jamesreagan/autobacklog/internal/github"
-	"github.com/jamesreagan/autobacklog/internal/logging"
-	"github.com/jamesreagan/autobacklog/internal/notify"
 )
 
 func newRunCmd() *cobra.Command {
@@ -27,78 +15,25 @@ func newRunCmd() *cobra.Command {
 }
 
 func runOnce(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load(cfgFile)
+	s, err := setup()
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
-
-	if verbose {
-		cfg.Logging.Level = "debug"
-	}
-	if helperMode != "" {
-		cfg.HelperMode = helperMode
-	}
-
-	log, err := logging.Setup(cfg.Logging)
-	if err != nil {
-		return fmt.Errorf("setting up logging: %w", err)
-	}
-
-	// Setup DB
-	dbPath := filepath.Join(os.Getenv("HOME"), ".autobacklog", "backlog.db")
-	store, err := backlog.NewSQLiteStore(dbPath)
-	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer store.Close()
-
-	// Setup GitHub auth
-	if !dryRun {
-		pat, _ := cfg.ResolveGitHubPAT()
-		ctx := context.Background()
-		if err := gh.SetupAuth(ctx, pat, log); err != nil {
-			log.Warn("GitHub auth setup failed", "error", err)
-		}
-	}
-
-	// Setup notifier
-	var notifier notify.Notifier
-	if cfg.Notifications.Enabled {
-		notifier = notify.NewEmailNotifier(cfg.Notifications, log)
-	} else {
-		notifier = notify.NoopNotifier{}
-	}
-
-	// Create orchestrator
-	orchestrator, err := app.New(cfg, store, notifier, log, dryRun)
-	if err != nil {
-		return fmt.Errorf("creating orchestrator: %w", err)
-	}
-
-	// Handle signals
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		log.Info("received shutdown signal")
-		cancel()
-	}()
+	defer s.store.Close()
+	defer s.cancel()
 
 	// If mode is "daemon", loop with the configured interval
-	if cfg.Mode == "daemon" {
-		return runDaemonLoop(ctx, cfg, orchestrator, log)
+	if s.cfg.Mode == "daemon" {
+		return runDaemonLoop(s.ctx, s.cfg, s.orchestrator, s.log)
 	}
 
 	// Run one cycle
-	stats, err := orchestrator.RunCycle(ctx)
+	stats, err := s.orchestrator.RunCycle(s.ctx)
 	if err != nil {
 		return fmt.Errorf("cycle failed: %w", err)
 	}
 
-	fmt.Println(stats.Summary())
+	s.log.Info(stats.Summary())
 
 	return nil
 }

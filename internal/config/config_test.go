@@ -92,29 +92,34 @@ func TestValidate(t *testing.T) {
 	}{
 		{
 			name:    "missing repo url",
-			cfg:     Config{Mode: "oneshot", Logging: LoggingConfig{Level: "info"}},
+			cfg:     Config{Mode: "oneshot", Logging: LoggingConfig{Level: "info", Format: "text"}},
 			wantErr: true,
 		},
 		{
 			name:    "invalid mode",
-			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "invalid", Logging: LoggingConfig{Level: "info"}},
+			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "invalid", Logging: LoggingConfig{Level: "info", Format: "text"}},
 			wantErr: true,
 		},
 		{
 			name:    "invalid log level",
-			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog", Logging: LoggingConfig{Level: "invalid"}},
+			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog", Logging: LoggingConfig{Level: "invalid", Format: "text"}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid log format",
+			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog", Logging: LoggingConfig{Level: "info", Format: "xml"}},
 			wantErr: true,
 		},
 		{
 			name:    "invalid helper_mode",
-			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "invalid", Logging: LoggingConfig{Level: "info"}},
+			cfg:     Config{Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "invalid", Logging: LoggingConfig{Level: "info", Format: "text"}},
 			wantErr: true,
 		},
 		{
 			name: "notifications enabled without smtp host",
 			cfg: Config{
 				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
-				Logging:       LoggingConfig{Level: "info"},
+				Logging:       LoggingConfig{Level: "info", Format: "text"},
 				Notifications: NotificationsConfig{Enabled: true, Recipients: []string{"a@b.com"}},
 			},
 			wantErr: true,
@@ -123,7 +128,7 @@ func TestValidate(t *testing.T) {
 			name: "notifications enabled without recipients",
 			cfg: Config{
 				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
-				Logging:       LoggingConfig{Level: "info"},
+				Logging:       LoggingConfig{Level: "info", Format: "text"},
 				Notifications: NotificationsConfig{Enabled: true, SMTP: SMTPConfig{Host: "smtp.example.com"}},
 			},
 			wantErr: true,
@@ -132,7 +137,7 @@ func TestValidate(t *testing.T) {
 			name: "valid config",
 			cfg: Config{
 				Repo: RepoConfig{URL: "https://example.com"}, Mode: "daemon", HelperMode: "burndown",
-				Logging: LoggingConfig{Level: "debug"},
+				Logging: LoggingConfig{Level: "debug", Format: "json"},
 			},
 			wantErr: false,
 		},

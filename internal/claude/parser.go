@@ -110,29 +110,60 @@ func parseTestDetectionRaw(text string) (*TestDetection, error) {
 }
 
 // extractJSON attempts to extract a JSON array or object from text that may contain
-// surrounding commentary.
+// surrounding commentary. It uses balanced bracket scanning to find the correct
+// closing delimiter, avoiding false matches from nested brackets or commentary.
 func extractJSON(text string) string {
 	text = strings.TrimSpace(text)
 
-	// Try to find JSON array
-	start := strings.Index(text, "[")
-	if start >= 0 {
-		end := strings.LastIndex(text, "]")
-		if end > start {
-			return text[start : end+1]
-		}
-	}
-
-	// Try to find JSON object
-	start = strings.Index(text, "{")
-	if start >= 0 {
-		end := strings.LastIndex(text, "}")
-		if end > start {
-			return text[start : end+1]
+	// Try to find a balanced JSON array first, then object
+	for _, pair := range [][2]byte{{'[', ']'}, {'{', '}'}} {
+		if result := findBalanced(text, pair[0], pair[1]); result != "" {
+			return result
 		}
 	}
 
 	return text
+}
+
+// findBalanced finds the first balanced occurrence of open/close delimiters,
+// accounting for JSON strings (quoted content is ignored for bracket counting).
+func findBalanced(text string, open, close byte) string {
+	start := strings.IndexByte(text, open)
+	if start < 0 {
+		return ""
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if ch == open {
+			depth++
+		} else if ch == close {
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func normalizePriority(s string) backlog.Priority {

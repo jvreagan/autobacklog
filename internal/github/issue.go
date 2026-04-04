@@ -13,10 +13,16 @@ import (
 
 // Issue represents a GitHub issue.
 type Issue struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	State  string `json:"state"`
+	Number int          `json:"number"`
+	Title  string       `json:"title"`
+	Body   string       `json:"body"`
+	State  string       `json:"state"`
+	Labels []IssueLabel `json:"labels"`
+}
+
+// IssueLabel represents a GitHub issue label.
+type IssueLabel struct {
+	Name string `json:"name"`
 }
 
 // EnsureLabel creates a GitHub label if it doesn't already exist.
@@ -28,6 +34,7 @@ func EnsureLabel(ctx context.Context, workDir, label string, log *slog.Logger) e
 		"--color", "0E8A16",
 		"--force")
 	cmd.Dir = workDir
+	cmd.Env = ghEnv()
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -49,6 +56,7 @@ func CreateIssue(ctx context.Context, workDir, title, body string, labels []stri
 
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = workDir
+	cmd.Env = ghEnv()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -72,16 +80,18 @@ func CreateIssue(ctx context.Context, workDir, title, body string, labels []stri
 func ListIssues(ctx context.Context, workDir, label string, log *slog.Logger) ([]Issue, error) {
 	log.Info("listing GitHub issues", "label", label)
 
+	const issueLimit = 500
 	args := []string{
 		"issue", "list",
 		"--label", label,
 		"--state", "open",
-		"--json", "number,title,body,state",
-		"--limit", "100",
+		"--json", "number,title,body,state,labels",
+		"--limit", strconv.Itoa(issueLimit),
 	}
 
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = workDir
+	cmd.Env = ghEnv()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -96,21 +106,35 @@ func ListIssues(ctx context.Context, workDir, label string, log *slog.Logger) ([
 		return nil, fmt.Errorf("parsing issue list JSON: %w", err)
 	}
 
+	if len(issues) == issueLimit {
+		log.Warn("issue list may be truncated — returned exactly the limit", "limit", issueLimit, "label", label)
+	}
+
 	log.Info("listed GitHub issues", "count", len(issues), "label", label)
 	return issues, nil
+}
+
+// LabelNames returns a slice of label name strings.
+func (i Issue) LabelNames() []string {
+	names := make([]string, len(i.Labels))
+	for j, l := range i.Labels {
+		names[j] = l.Name
+	}
+	return names
 }
 
 // parseIssueNumber extracts the issue number from a GitHub issue URL.
 // Expected format: https://github.com/owner/repo/issues/123
 func parseIssueNumber(url string) (int, error) {
 	url = strings.TrimRight(url, "/")
-	parts := strings.Split(url, "/")
-	if len(parts) == 0 {
+	if url == "" {
 		return 0, fmt.Errorf("empty URL")
 	}
-	num, err := strconv.Atoi(parts[len(parts)-1])
+	parts := strings.Split(url, "/")
+	last := parts[len(parts)-1]
+	num, err := strconv.Atoi(last)
 	if err != nil {
-		return 0, fmt.Errorf("invalid issue number in URL: %w", err)
+		return 0, fmt.Errorf("last URL segment %q is not a number: %w", last, err)
 	}
 	return num, nil
 }

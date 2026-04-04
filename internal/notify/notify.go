@@ -1,6 +1,6 @@
 package notify
 
-// Event types that can trigger notifications.
+// EventType classifies the kind of event that triggers a notification.
 type EventType string
 
 const (
@@ -26,4 +26,5 @@ type Notifier interface {
 // NoopNotifier discards all notifications (used when notifications are disabled).
 type NoopNotifier struct{}
 
+// Send discards the notification and always returns nil.
 func (NoopNotifier) Send(Notification) error { return nil }

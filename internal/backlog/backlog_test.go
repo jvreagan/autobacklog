@@ -21,12 +21,15 @@ func TestSimilarText(t *testing.T) {
 	}{
 		{"Fix bug", "Fix bug", true},
 		{"Fix bug", "fix bug", true},
-		{"Fix bug in handler", "Fix bug", true},
-		{"Fix bug", "Fix bug in handler", true},
+		{"Fix bug in handler", "Fix bug", false},       // short titles: no substring match
+		{"Fix bug", "Fix bug in handler", false},        // short titles: no substring match
 		{"Fix bug", "Add feature", false},
 		{"  Fix bug  ", "fix bug", true},
 		{"", "", true},
 		{"abc", "xyz", false},
+		// Long titles: substring matching applies (>= 20 chars)
+		{"Refactor authentication handler logic", "Refactor authentication handler", true},
+		{"Refactor authentication handler", "Refactor authentication handler logic", true},
 	}
 
 	for _, tt := range tests {

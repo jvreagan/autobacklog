@@ -28,6 +28,7 @@ func NewEmailNotifier(cfg config.NotificationsConfig, log *slog.Logger) *EmailNo
 	return &EmailNotifier{cfg: cfg, log: log, events: events}
 }
 
+// Send delivers a notification via SMTP email if the event type is enabled.
 func (e *EmailNotifier) Send(n Notification) error {
 	if !e.events[n.Event] {
 		e.log.Debug("notification event disabled, skipping", "event", n.Event)

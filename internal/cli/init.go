@@ -94,7 +94,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	fmt.Printf("Created %s — edit it with your repo and credentials, then run:\n", filename)
-	fmt.Println("  autobacklog run --config autobacklog.yaml")
+	cmd.Printf("Created %s — edit it with your repo and credentials, then run:\n", filename)
+	cmd.Println("  autobacklog run --config autobacklog.yaml")
 	return nil
 }

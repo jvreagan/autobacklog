@@ -66,8 +66,8 @@ func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error
 	cmd.Env = filteredEnv()
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputBytes}
+	cmd.Stderr = &limitedWriter{w: &stderr, limit: maxOutputBytes}
 
 	err := cmd.Run()
 	if err != nil {
@@ -117,8 +117,8 @@ func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, 
 	cmd.Env = filteredEnv()
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputBytes}
+	cmd.Stderr = &limitedWriter{w: &stderr, limit: maxOutputBytes}
 
 	err := cmd.Run()
 	if err != nil {
@@ -138,6 +138,29 @@ func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, 
 	c.budget.Record(c.cfg.MaxBudgetPerCall)
 
 	return stdout.String(), nil
+}
+
+// maxOutputBytes is the maximum size of captured stdout/stderr from the Claude CLI (100 MB).
+const maxOutputBytes = 100 * 1024 * 1024
+
+// limitedWriter wraps an io.Writer and stops writing after limit bytes.
+type limitedWriter struct {
+	w       *bytes.Buffer
+	limit   int
+	written int
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	remaining := lw.limit - lw.written
+	if remaining <= 0 {
+		return len(p), nil // discard silently
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+	}
+	n, err := lw.w.Write(p)
+	lw.written += n
+	return n, err
 }
 
 // filteredEnv returns the current environment with the CLAUDECODE variable

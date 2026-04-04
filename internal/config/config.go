@@ -10,6 +10,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Default configuration values.
+const (
+	DefaultBranch          = "main"
+	DefaultWorkDir         = "/tmp/autobacklog"
+	DefaultPRBranchPrefix  = "autobacklog"
+	DefaultBinary          = "claude"
+	DefaultModel           = "sonnet"
+	DefaultBudgetPerCall   = 10.0
+	DefaultBudgetTotal     = 100.0
+	DefaultHighThreshold   = 1
+	DefaultMediumThreshold = 3
+	DefaultLowThreshold    = 5
+	DefaultMaxPerCycle     = 5
+	DefaultStaleDays       = 30
+	DefaultMaxRetries      = 3
+	DefaultMode            = "oneshot"
+	DefaultHelperMode      = "buildbacklog"
+	DefaultLogLevel        = "info"
+	DefaultLogFormat       = "text"
+	DefaultSMTPPort        = 587
+	DefaultIssueLabel      = "autobacklog"
+)
+
 var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 // Load reads a YAML config file, interpolates environment variables, and validates it.
@@ -48,73 +71,73 @@ func interpolateEnvVars(input string) string {
 
 func applyDefaults(cfg *Config) {
 	if cfg.Repo.Branch == "" {
-		cfg.Repo.Branch = "main"
+		cfg.Repo.Branch = DefaultBranch
 	}
 	if cfg.Repo.WorkDir == "" {
-		cfg.Repo.WorkDir = "/tmp/autobacklog"
+		cfg.Repo.WorkDir = DefaultWorkDir
 	}
 	if cfg.Repo.PRBranchPrefix == "" {
-		cfg.Repo.PRBranchPrefix = "autobacklog"
+		cfg.Repo.PRBranchPrefix = DefaultPRBranchPrefix
 	}
 	if cfg.Claude.Binary == "" {
-		cfg.Claude.Binary = "claude"
+		cfg.Claude.Binary = DefaultBinary
 	}
 	if cfg.Claude.Model == "" {
-		cfg.Claude.Model = "sonnet"
+		cfg.Claude.Model = DefaultModel
 	}
 	if cfg.Claude.MaxBudgetPerCall == 0 {
-		cfg.Claude.MaxBudgetPerCall = 10.0
+		cfg.Claude.MaxBudgetPerCall = DefaultBudgetPerCall
 	}
 	if cfg.Claude.MaxBudgetTotal == 0 {
-		cfg.Claude.MaxBudgetTotal = 100.0
+		cfg.Claude.MaxBudgetTotal = DefaultBudgetTotal
 	}
 	if cfg.Claude.Timeout == 0 {
 		cfg.Claude.Timeout = 10 * time.Minute
 	}
 	if cfg.Backlog.HighThreshold == 0 {
-		cfg.Backlog.HighThreshold = 1
+		cfg.Backlog.HighThreshold = DefaultHighThreshold
 	}
 	if cfg.Backlog.MediumThreshold == 0 {
-		cfg.Backlog.MediumThreshold = 3
+		cfg.Backlog.MediumThreshold = DefaultMediumThreshold
 	}
 	if cfg.Backlog.LowThreshold == 0 {
-		cfg.Backlog.LowThreshold = 5
+		cfg.Backlog.LowThreshold = DefaultLowThreshold
 	}
 	if cfg.Backlog.MaxPerCycle == 0 {
-		cfg.Backlog.MaxPerCycle = 5
+		cfg.Backlog.MaxPerCycle = DefaultMaxPerCycle
 	}
 	if cfg.Backlog.StaleDays == 0 {
-		cfg.Backlog.StaleDays = 30
+		cfg.Backlog.StaleDays = DefaultStaleDays
 	}
 	if cfg.Testing.Timeout == 0 {
 		cfg.Testing.Timeout = 5 * time.Minute
 	}
 	if cfg.Testing.MaxRetries == 0 {
-		cfg.Testing.MaxRetries = 3
+		cfg.Testing.MaxRetries = DefaultMaxRetries
 	}
-	if cfg.Testing.AutoDetect == false && cfg.Testing.OverrideCommand == "" {
+	if !cfg.Testing.AutoDetect && cfg.Testing.OverrideCommand == "" {
 		cfg.Testing.AutoDetect = true
 	}
 	if cfg.Mode == "" {
-		cfg.Mode = "oneshot"
+		cfg.Mode = DefaultMode
 	}
 	if cfg.HelperMode == "" {
-		cfg.HelperMode = "buildbacklog"
+		cfg.HelperMode = DefaultHelperMode
 	}
 	if cfg.Daemon.Interval == 0 {
 		cfg.Daemon.Interval = 1 * time.Hour
 	}
 	if cfg.Logging.Level == "" {
-		cfg.Logging.Level = "info"
+		cfg.Logging.Level = DefaultLogLevel
 	}
 	if cfg.Logging.Format == "" {
-		cfg.Logging.Format = "text"
+		cfg.Logging.Format = DefaultLogFormat
 	}
 	if cfg.Notifications.SMTP.Port == 0 {
-		cfg.Notifications.SMTP.Port = 587
+		cfg.Notifications.SMTP.Port = DefaultSMTPPort
 	}
 	if cfg.GitHub.IssueLabel == "" {
-		cfg.GitHub.IssueLabel = "autobacklog"
+		cfg.GitHub.IssueLabel = DefaultIssueLabel
 	}
 }
 
@@ -131,6 +154,13 @@ func validate(cfg *Config) error {
 	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 	if !validLevels[strings.ToLower(cfg.Logging.Level)] {
 		return fmt.Errorf("logging.level must be debug/info/warn/error, got %q", cfg.Logging.Level)
+	}
+	validFormats := map[string]bool{"text": true, "json": true}
+	if !validFormats[strings.ToLower(cfg.Logging.Format)] {
+		return fmt.Errorf("logging.format must be 'text' or 'json', got %q", cfg.Logging.Format)
+	}
+	if strings.Contains(cfg.Claude.Binary, "..") {
+		return fmt.Errorf("claude.binary must not contain path traversal (..), got %q", cfg.Claude.Binary)
 	}
 	if cfg.Notifications.Enabled {
 		if cfg.Notifications.SMTP.Host == "" {

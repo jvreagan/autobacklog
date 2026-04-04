@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -59,18 +60,28 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("creating tables: %w", err)
 	}
 
-	// Idempotent migration: add repo_url column to existing databases.
-	// Ignore error — column already exists on fresh databases.
-	db.Exec(migrateRepoURLSQL)
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_repo_url ON backlog_items(repo_url)`)
-
-	// Idempotent migration: add issue_number column to existing databases.
-	db.Exec(`ALTER TABLE backlog_items ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0`)
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_issue_number ON backlog_items(issue_number)`)
+	// Idempotent migrations: add columns to existing databases.
+	// "already exists" errors are expected on fresh DBs; real errors are logged.
+	execMigration(db, migrateRepoURLSQL)
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_repo_url ON backlog_items(repo_url)`)
+	execMigration(db, `ALTER TABLE backlog_items ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0`)
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_issue_number ON backlog_items(issue_number)`)
 
 	return &SQLiteStore{db: db}, nil
 }
 
+// execMigration runs a migration statement, ignoring "already exists" errors.
+func execMigration(db *sql.DB, stmt string) {
+	if _, err := db.Exec(stmt); err != nil {
+		msg := err.Error()
+		if !strings.Contains(msg, "already exists") && !strings.Contains(msg, "duplicate column") {
+			// Genuine failure — log via stderr since slog isn't available here
+			fmt.Fprintf(os.Stderr, "autobacklog: migration warning: %v\n", err)
+		}
+	}
+}
+
+// Insert adds a new item to the SQLite store.
 func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at)
@@ -79,9 +90,13 @@ func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
 		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink,
 		item.CreatedAt, item.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("inserting item %q: %w", item.ID, err)
+	}
+	return nil
 }
 
+// Update modifies an existing item in the SQLite store.
 func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
 	item.UpdatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx,
@@ -91,16 +106,25 @@ func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
 		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink,
 		item.UpdatedAt, item.ID,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("updating item %q: %w", item.ID, err)
+	}
+	return nil
 }
 
+// Get retrieves an item by ID from the SQLite store.
 func (s *SQLiteStore) Get(ctx context.Context, id string) (*Item, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at
 		 FROM backlog_items WHERE id=?`, id)
-	return scanItem(row)
+	item, err := scanRow(row)
+	if err != nil {
+		return nil, fmt.Errorf("getting item %q: %w", id, err)
+	}
+	return item, nil
 }
 
+// List returns items matching the given filter from the SQLite store.
 func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, error) {
 	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at FROM backlog_items WHERE 1=1`
 	args := []any{}
@@ -129,66 +153,62 @@ func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, err
 	query += ` ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END, created_at ASC`
 
 	if filter.Limit > 0 {
-		query += fmt.Sprintf(` LIMIT %d`, filter.Limit)
+		query += ` LIMIT ?`
+		args = append(args, filter.Limit)
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listing items: %w", err)
 	}
 	defer rows.Close()
 
 	var items []*Item
 	for rows.Next() {
-		item, err := scanItemFromRows(rows)
+		item, err := scanRow(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scanning item row: %w", err)
 		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
 }
 
+// Delete removes an item by ID from the SQLite store.
 func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM backlog_items WHERE id=?`, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("deleting item %q: %w", id, err)
+	}
+	return nil
 }
 
+// DeleteStale removes items in terminal status older than the given number of days.
 func (s *SQLiteStore) DeleteStale(ctx context.Context, repoURL string, days int) (int, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 	result, err := s.db.ExecContext(ctx,
 		`DELETE FROM backlog_items WHERE repo_url=? AND status IN ('done', 'failed', 'skipped') AND updated_at < ?`, repoURL, cutoff)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("deleting stale items: %w", err)
 	}
 	n, _ := result.RowsAffected()
 	return int(n), nil
 }
 
+// Close closes the underlying database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error
 }
 
-func scanItem(row *sql.Row) (*Item, error) {
+// scanRow scans a single row into an Item. Works with both *sql.Row and *sql.Rows.
+func scanRow(s scanner) (*Item, error) {
 	item := &Item{}
-	err := row.Scan(
-		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber, &item.IssueNumber,
-		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink,
-		&item.CreatedAt, &item.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return item, nil
-}
-
-func scanItemFromRows(rows *sql.Rows) (*Item, error) {
-	item := &Item{}
-	err := rows.Scan(
+	err := s.Scan(
 		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber, &item.IssueNumber,
 		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink,
 		&item.CreatedAt, &item.UpdatedAt,

@@ -10,12 +10,14 @@ import (
 )
 
 // Setup initializes the global slog logger from config.
+// When cfg.File is set, the returned cleanup function closes the log file handle.
+// Callers should defer cleanup() after checking for errors.
 func Setup(cfg config.LoggingConfig) (*slog.Logger, error) {
 	level := parseLevel(cfg.Level)
 
 	var writer io.Writer = os.Stderr
 	if cfg.File != "" {
-		f, err := os.OpenFile(cfg.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		f, err := os.OpenFile(cfg.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return nil, err
 		}
