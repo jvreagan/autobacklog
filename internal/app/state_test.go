@@ -11,6 +11,7 @@ func TestState_String(t *testing.T) {
 		want  string
 	}{
 		{StateClone, "CLONE"},
+		{StateImportIssues, "IMPORT_ISSUES"},
 		{StateReview, "REVIEW"},
 		{StateIngest, "INGEST"},
 		{StateEvaluateThreshold, "EVALUATE_THRESHOLD"},
@@ -34,7 +35,7 @@ func TestState_String(t *testing.T) {
 func TestState_Next(t *testing.T) {
 	// Verify the state machine transitions in order
 	expected := []State{
-		StateClone, StateReview, StateIngest, StateEvaluateThreshold,
+		StateClone, StateImportIssues, StateReview, StateIngest, StateEvaluateThreshold,
 		StateImplement, StateTest, StatePR, StateDocument, StateDone,
 	}
 

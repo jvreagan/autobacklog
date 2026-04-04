@@ -10,6 +10,7 @@ type State int
 
 const (
 	StateClone State = iota
+	StateImportIssues
 	StateReview
 	StateIngest
 	StateEvaluateThreshold
@@ -24,6 +25,8 @@ func (s State) String() string {
 	switch s {
 	case StateClone:
 		return "CLONE"
+	case StateImportIssues:
+		return "IMPORT_ISSUES"
 	case StateReview:
 		return "REVIEW"
 	case StateIngest:
@@ -50,6 +53,8 @@ func (s State) Description() string {
 	switch s {
 	case StateClone:
 		return "cloning or pulling the target repository"
+	case StateImportIssues:
+		return "importing labeled GitHub issues"
 	case StateReview:
 		return "reviewing codebase with Claude for improvement opportunities"
 	case StateIngest:
@@ -92,6 +97,8 @@ type CycleStats struct {
 	ItemsFound       int
 	ItemsInserted    int
 	ItemsImplemented int
+	IssuesImported   int
+	IssuesCreated    int
 	PRsCreated       int
 	PRsAutoMerged    int
 	TestFailures     int
@@ -134,6 +141,12 @@ func (s *CycleStats) Summary() string {
 	}
 	if s.PRsCreated > 0 {
 		parts = append(parts, fmt.Sprintf("%d PR created", s.PRsCreated))
+	}
+	if s.IssuesImported > 0 {
+		parts = append(parts, fmt.Sprintf("%d issues imported", s.IssuesImported))
+	}
+	if s.IssuesCreated > 0 {
+		parts = append(parts, fmt.Sprintf("%d issues created", s.IssuesCreated))
 	}
 
 	var b strings.Builder

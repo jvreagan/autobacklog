@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,6 +163,25 @@ func (m *mockPRCreator) EnableAutoMerge(_ context.Context, _, _ string) error {
 	return m.autoMergeErr
 }
 
+type mockIssueManager struct {
+	createIssueNum  int
+	createIssueErr  error
+	listIssues      []gh.Issue
+	listIssuesErr   error
+	createIssueCalls int
+	listIssuesCalls  int
+}
+
+func (m *mockIssueManager) CreateIssue(_ context.Context, _, _, _ string, _ []string) (int, error) {
+	m.createIssueCalls++
+	return m.createIssueNum, m.createIssueErr
+}
+
+func (m *mockIssueManager) ListIssues(_ context.Context, _, _ string) ([]gh.Issue, error) {
+	m.listIssuesCalls++
+	return m.listIssues, m.listIssuesErr
+}
+
 type mockNotifier struct {
 	notifications []notify.Notification
 }
@@ -225,10 +245,11 @@ func newTestApp(t *testing.T, opts ...func(*App)) *App {
 	ai := newMockAIClient(100.0)
 	tr := &mockTestRunner{}
 	pr := &mockPRCreator{prURL: "https://github.com/test/repo/pull/1"}
+	im := &mockIssueManager{createIssueNum: 1}
 	notif := &mockNotifier{}
 	log := slog.Default()
 
-	a := NewWithDeps(cfg, repo, ai, tr, pr, store, notif, log, false)
+	a := NewWithDeps(cfg, repo, ai, tr, pr, im, store, notif, log, false)
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -1602,7 +1623,7 @@ func TestImplementItem_NeverPushes_WithoutCommit_VerifiesError(t *testing.T) {
 
 func TestState_Description_AllStates(t *testing.T) {
 	states := []State{
-		StateClone, StateReview, StateIngest, StateEvaluateThreshold,
+		StateClone, StateImportIssues, StateReview, StateIngest, StateEvaluateThreshold,
 		StateImplement, StateTest, StatePR, StateDocument, StateDone,
 	}
 	for _, s := range states {
@@ -1618,4 +1639,199 @@ func TestState_Description_Unknown(t *testing.T) {
 	if s.Description() != "unknown" {
 		t.Errorf("unknown state description = %q, want 'unknown'", s.Description())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// doImportIssues tests
+// ---------------------------------------------------------------------------
+
+func TestDoImportIssues_DryRun(t *testing.T) {
+	a := newTestApp(t, func(a *App) { a.dryRun = true })
+	stats := &CycleStats{}
+	if err := a.doImportIssues(context.Background(), stats); err != nil {
+		t.Fatal(err)
+	}
+	im := a.issueManager.(*mockIssueManager)
+	if im.listIssuesCalls != 0 {
+		t.Error("should not list issues in dry-run")
+	}
+}
+
+func TestDoImportIssues_NoLabel(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.IssueLabel = ""
+	stats := &CycleStats{}
+	if err := a.doImportIssues(context.Background(), stats); err != nil {
+		t.Fatal(err)
+	}
+	im := a.issueManager.(*mockIssueManager)
+	if im.listIssuesCalls != 0 {
+		t.Error("should not list issues when label is empty")
+	}
+}
+
+func TestDoImportIssues_ListError_NonFatal(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.IssueLabel = "autobacklog"
+	im := a.issueManager.(*mockIssueManager)
+	im.listIssuesErr = errors.New("gh failed")
+
+	stats := &CycleStats{}
+	err := a.doImportIssues(context.Background(), stats)
+	if err != nil {
+		t.Fatalf("list error should be non-fatal, got: %v", err)
+	}
+}
+
+func TestDoImportIssues_ImportsNewIssues(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.IssueLabel = "autobacklog"
+	im := a.issueManager.(*mockIssueManager)
+	im.listIssues = []gh.Issue{
+		{Number: 10, Title: "Issue from GH", Body: "body text", State: "open"},
+	}
+
+	stats := &CycleStats{}
+	if err := a.doImportIssues(context.Background(), stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.IssuesImported != 1 {
+		t.Errorf("IssuesImported = %d, want 1", stats.IssuesImported)
+	}
+
+	// Verify item was inserted
+	issueNum := 10
+	items, _ := a.store.List(context.Background(), backlog.ListFilter{IssueNumber: &issueNum})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item with issue_number=10, got %d", len(items))
+	}
+	if items[0].Title != "Issue from GH" {
+		t.Errorf("Title = %q, want 'Issue from GH'", items[0].Title)
+	}
+}
+
+func TestDoImportIssues_SkipsAlreadyImported(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.IssueLabel = "autobacklog"
+	ctx := context.Background()
+
+	// Pre-insert an item with issue_number=10
+	existing := backlog.NewItem("Already here", "desc", "", backlog.PriorityMedium, backlog.CategoryRefactor)
+	existing.RepoURL = a.cfg.Repo.URL
+	existing.IssueNumber = 10
+	a.store.Insert(ctx, existing)
+
+	im := a.issueManager.(*mockIssueManager)
+	im.listIssues = []gh.Issue{
+		{Number: 10, Title: "Issue from GH", Body: "body", State: "open"},
+	}
+
+	stats := &CycleStats{}
+	if err := a.doImportIssues(ctx, stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.IssuesImported != 0 {
+		t.Errorf("IssuesImported = %d, want 0 (already exists)", stats.IssuesImported)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Outbound issue creation tests
+// ---------------------------------------------------------------------------
+
+func TestDoIngest_CreatesIssues_WhenConfigured(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.CreateIssues = true
+	a.cfg.GitHub.IssueLabel = "autobacklog"
+
+	im := a.issueManager.(*mockIssueManager)
+	im.createIssueNum = 55
+
+	a.reviewItems = []*backlog.Item{
+		backlog.NewItem("New bug", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug),
+	}
+
+	stats := &CycleStats{}
+	if err := a.doIngest(context.Background(), stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.IssuesCreated != 1 {
+		t.Errorf("IssuesCreated = %d, want 1", stats.IssuesCreated)
+	}
+	if im.createIssueCalls != 1 {
+		t.Errorf("createIssueCalls = %d, want 1", im.createIssueCalls)
+	}
+}
+
+func TestDoIngest_SkipsIssueCreation_WhenDisabled(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.CreateIssues = false
+
+	a.reviewItems = []*backlog.Item{
+		backlog.NewItem("New bug", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug),
+	}
+
+	stats := &CycleStats{}
+	if err := a.doIngest(context.Background(), stats); err != nil {
+		t.Fatal(err)
+	}
+
+	im := a.issueManager.(*mockIssueManager)
+	if im.createIssueCalls != 0 {
+		t.Error("should not create issues when CreateIssues is false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// implementItem — Fixes #N in PR body
+// ---------------------------------------------------------------------------
+
+func TestImplementItem_IncludesFixesInPRBody(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	ctx := context.Background()
+
+	item := backlog.NewItem("Fix bug", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.IssueNumber = 42
+	a.store.Insert(ctx, item)
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: true, Output: "ok"}}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.prURL = "https://github.com/test/repo/pull/1"
+
+	// Capture the PR body by wrapping the mock
+	var capturedBody string
+	origPR := a.prCreator
+	a.prCreator = &prBodyCapture{inner: origPR, body: &capturedBody}
+
+	stats := &CycleStats{}
+	if err := a.implementItem(ctx, item, stats); err != nil {
+		t.Fatalf("implementItem: %v", err)
+	}
+
+	if capturedBody == "" {
+		t.Fatal("PR body was not captured")
+	}
+	if !strings.Contains(capturedBody, "Fixes #42") {
+		t.Errorf("PR body should contain 'Fixes #42', got:\n%s", capturedBody)
+	}
+}
+
+// prBodyCapture wraps a PRCreator to capture the PR body
+type prBodyCapture struct {
+	inner PRCreator
+	body  *string
+}
+
+func (p *prBodyCapture) CreatePR(ctx context.Context, workDir string, req gh.PRRequest) (string, error) {
+	*p.body = req.Body
+	return p.inner.CreatePR(ctx, workDir, req)
+}
+
+func (p *prBodyCapture) EnableAutoMerge(ctx context.Context, workDir string, prURL string) error {
+	return p.inner.EnableAutoMerge(ctx, workDir, prURL)
 }

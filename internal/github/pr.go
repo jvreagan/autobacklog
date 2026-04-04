@@ -66,11 +66,15 @@ func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slo
 }
 
 // FormatPRBody creates a structured PR body from the given fields.
-func FormatPRBody(title, description, category, testResults string) string {
+// If issueNumber > 0, a "Fixes #N" line is included to auto-close the linked issue.
+func FormatPRBody(title, description, category, testResults string, issueNumber int) string {
 	var b strings.Builder
 	b.WriteString("## Summary\n\n")
 	b.WriteString(description)
 	b.WriteString("\n\n")
+	if issueNumber > 0 {
+		fmt.Fprintf(&b, "Fixes #%d\n\n", issueNumber)
+	}
 	b.WriteString("## Category\n\n")
 	b.WriteString(category)
 	b.WriteString("\n\n")

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -80,6 +81,11 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
+	return runDaemonLoop(ctx, cfg, orchestrator, log)
+}
+
+// runDaemonLoop is the shared loop used by both `run` (when mode=daemon) and `daemon`.
+func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.App, log *slog.Logger) error {
 	log.Info("daemon started", "interval", cfg.Daemon.Interval)
 
 	for {

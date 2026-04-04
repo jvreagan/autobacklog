@@ -23,9 +23,11 @@ type RepoConfig struct {
 }
 
 type GitHubConfig struct {
-	PAT       string `yaml:"pat"`
-	PATFile   string `yaml:"pat_file"`
-	AutoMerge bool   `yaml:"auto_merge"`
+	PAT          string `yaml:"pat"`
+	PATFile      string `yaml:"pat_file"`
+	AutoMerge    bool   `yaml:"auto_merge"`
+	CreateIssues bool   `yaml:"create_issues"`
+	IssueLabel   string `yaml:"issue_label"`
 }
 
 type ClaudeConfig struct {

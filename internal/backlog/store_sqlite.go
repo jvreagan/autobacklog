@@ -18,19 +18,20 @@ type SQLiteStore struct {
 
 const createTableSQL = `
 CREATE TABLE IF NOT EXISTS backlog_items (
-	id          TEXT PRIMARY KEY,
-	repo_url    TEXT NOT NULL DEFAULT '',
-	title       TEXT NOT NULL,
-	description TEXT NOT NULL,
-	file_path   TEXT NOT NULL DEFAULT '',
-	line_number INTEGER NOT NULL DEFAULT 0,
-	priority    TEXT NOT NULL DEFAULT 'low',
-	category    TEXT NOT NULL DEFAULT 'refactor',
-	status      TEXT NOT NULL DEFAULT 'pending',
-	attempts    INTEGER NOT NULL DEFAULT 0,
-	pr_link     TEXT NOT NULL DEFAULT '',
-	created_at  DATETIME NOT NULL,
-	updated_at  DATETIME NOT NULL
+	id           TEXT PRIMARY KEY,
+	repo_url     TEXT NOT NULL DEFAULT '',
+	title        TEXT NOT NULL,
+	description  TEXT NOT NULL,
+	file_path    TEXT NOT NULL DEFAULT '',
+	line_number  INTEGER NOT NULL DEFAULT 0,
+	issue_number INTEGER NOT NULL DEFAULT 0,
+	priority     TEXT NOT NULL DEFAULT 'low',
+	category     TEXT NOT NULL DEFAULT 'refactor',
+	status       TEXT NOT NULL DEFAULT 'pending',
+	attempts     INTEGER NOT NULL DEFAULT 0,
+	pr_link      TEXT NOT NULL DEFAULT '',
+	created_at   DATETIME NOT NULL,
+	updated_at   DATETIME NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_status ON backlog_items(status);
@@ -63,14 +64,18 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	db.Exec(migrateRepoURLSQL)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_repo_url ON backlog_items(repo_url)`)
 
+	// Idempotent migration: add issue_number column to existing databases.
+	db.Exec(`ALTER TABLE backlog_items ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_issue_number ON backlog_items(issue_number)`)
+
 	return &SQLiteStore{db: db}, nil
 }
 
 func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, priority, category, status, attempts, pr_link, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ID, item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber,
+		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
 		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink,
 		item.CreatedAt, item.UpdatedAt,
 	)
@@ -80,9 +85,9 @@ func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
 func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
 	item.UpdatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE backlog_items SET title=?, description=?, file_path=?, line_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, updated_at=?
+		`UPDATE backlog_items SET title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, updated_at=?
 		 WHERE id=?`,
-		item.Title, item.Description, item.FilePath, item.LineNumber,
+		item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
 		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink,
 		item.UpdatedAt, item.ID,
 	)
@@ -91,13 +96,13 @@ func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
 
 func (s *SQLiteStore) Get(ctx context.Context, id string) (*Item, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, repo_url, title, description, file_path, line_number, priority, category, status, attempts, pr_link, created_at, updated_at
+		`SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at
 		 FROM backlog_items WHERE id=?`, id)
 	return scanItem(row)
 }
 
 func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, error) {
-	query := `SELECT id, repo_url, title, description, file_path, line_number, priority, category, status, attempts, pr_link, created_at, updated_at FROM backlog_items WHERE 1=1`
+	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at FROM backlog_items WHERE 1=1`
 	args := []any{}
 
 	if filter.Status != nil {
@@ -115,6 +120,10 @@ func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, err
 	if filter.RepoURL != nil {
 		query += ` AND repo_url=?`
 		args = append(args, *filter.RepoURL)
+	}
+	if filter.IssueNumber != nil {
+		query += ` AND issue_number=?`
+		args = append(args, *filter.IssueNumber)
 	}
 
 	query += ` ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END, created_at ASC`
@@ -167,7 +176,7 @@ type scanner interface {
 func scanItem(row *sql.Row) (*Item, error) {
 	item := &Item{}
 	err := row.Scan(
-		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber,
+		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber, &item.IssueNumber,
 		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink,
 		&item.CreatedAt, &item.UpdatedAt,
 	)
@@ -180,7 +189,7 @@ func scanItem(row *sql.Row) (*Item, error) {
 func scanItemFromRows(rows *sql.Rows) (*Item, error) {
 	item := &Item{}
 	err := rows.Scan(
-		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber,
+		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber, &item.IssueNumber,
 		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink,
 		&item.CreatedAt, &item.UpdatedAt,
 	)

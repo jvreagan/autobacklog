@@ -23,6 +23,7 @@ type App struct {
 	manager       *backlog.Manager
 	runner        TestRunner
 	prCreator     PRCreator
+	issueManager  IssueManager
 	notifier      notify.Notifier
 	log           *slog.Logger
 	dryRun        bool
@@ -43,6 +44,19 @@ func (d *defaultPRCreator) EnableAutoMerge(ctx context.Context, workDir string, 
 	return gh.EnableAutoMerge(ctx, workDir, prURL, d.log)
 }
 
+// defaultIssueManager wraps the free functions in the github package.
+type defaultIssueManager struct {
+	log *slog.Logger
+}
+
+func (d *defaultIssueManager) CreateIssue(ctx context.Context, workDir, title, body string, labels []string) (int, error) {
+	return gh.CreateIssue(ctx, workDir, title, body, labels, d.log)
+}
+
+func (d *defaultIssueManager) ListIssues(ctx context.Context, workDir, label string) ([]gh.Issue, error) {
+	return gh.ListIssues(ctx, workDir, label, d.log)
+}
+
 // New creates a new App orchestrator with production dependencies.
 func New(cfg *config.Config, store backlog.Store, notifier notify.Notifier, log *slog.Logger, dryRun bool) (*App, error) {
 	pat, err := cfg.ResolveGitHubPAT()
@@ -54,7 +68,7 @@ func New(cfg *config.Config, store backlog.Store, notifier notify.Notifier, log 
 	claudeClient := claude.NewClient(cfg.Claude, log)
 	testRunner := runner.NewRunner(log, cfg.Testing.Timeout)
 
-	return NewWithDeps(cfg, repo, claudeClient, testRunner, &defaultPRCreator{log: log}, store, notifier, log, dryRun), nil
+	return NewWithDeps(cfg, repo, claudeClient, testRunner, &defaultPRCreator{log: log}, &defaultIssueManager{log: log}, store, notifier, log, dryRun), nil
 }
 
 // NewWithDeps creates an App with explicitly provided dependencies (for testing).
@@ -64,6 +78,7 @@ func NewWithDeps(
 	aiClient AIClient,
 	testRunner TestRunner,
 	prCreator PRCreator,
+	issueManager IssueManager,
 	store backlog.Store,
 	notifier notify.Notifier,
 	log *slog.Logger,
@@ -71,16 +86,17 @@ func NewWithDeps(
 ) *App {
 	mgr := backlog.NewManager(store, log)
 	return &App{
-		cfg:       cfg,
-		repo:      repo,
-		claude:    aiClient,
-		store:     store,
-		manager:   mgr,
-		runner:    testRunner,
-		prCreator: prCreator,
-		notifier:  notifier,
-		log:       log,
-		dryRun:    dryRun,
+		cfg:          cfg,
+		repo:         repo,
+		claude:       aiClient,
+		store:        store,
+		manager:      mgr,
+		runner:       testRunner,
+		prCreator:    prCreator,
+		issueManager: issueManager,
+		notifier:     notifier,
+		log:          log,
+		dryRun:       dryRun,
 	}
 }
 
@@ -98,6 +114,8 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		switch state {
 		case StateClone:
 			err = a.doClone(ctx)
+		case StateImportIssues:
+			err = a.doImportIssues(ctx, stats)
 		case StateReview:
 			err = a.doReview(ctx, stats)
 		case StateIngest:
@@ -161,6 +179,56 @@ func (a *App) doClone(ctx context.Context) error {
 	return a.repo.CloneOrPull(ctx)
 }
 
+func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
+	label := a.cfg.GitHub.IssueLabel
+	if label == "" {
+		a.log.Info("no issue label configured, skipping import")
+		return nil
+	}
+	if a.dryRun {
+		a.log.Info("[dry-run] would import GitHub issues", "label", label)
+		return nil
+	}
+
+	a.log.Info("importing labeled GitHub issues", "label", label)
+	issues, err := a.issueManager.ListIssues(ctx, a.repo.WorkDir(), label)
+	if err != nil {
+		a.log.Warn("failed to list GitHub issues, continuing", "error", err)
+		return nil
+	}
+
+	for _, issue := range issues {
+		// Check if already imported
+		issueNum := issue.Number
+		existing, err := a.store.List(ctx, backlog.ListFilter{
+			IssueNumber: &issueNum,
+			RepoURL:     &a.cfg.Repo.URL,
+		})
+		if err != nil {
+			a.log.Warn("failed to check existing issue", "issue_number", issueNum, "error", err)
+			continue
+		}
+		if len(existing) > 0 {
+			a.log.Info("issue already imported, skipping", "issue_number", issueNum, "title", issue.Title)
+			continue
+		}
+
+		item := backlog.NewItem(issue.Title, issue.Body, "", backlog.PriorityMedium, backlog.CategoryRefactor)
+		item.RepoURL = a.cfg.Repo.URL
+		item.IssueNumber = issueNum
+
+		if err := a.store.Insert(ctx, item); err != nil {
+			a.log.Warn("failed to import issue", "issue_number", issueNum, "error", err)
+			continue
+		}
+
+		stats.IssuesImported++
+		a.log.Info("imported issue", "issue_number", issueNum, "title", issue.Title)
+	}
+
+	return nil
+}
+
 func (a *App) doReview(ctx context.Context, stats *CycleStats) error {
 	if a.dryRun {
 		a.log.Info("[dry-run] would review codebase with Claude", "model", a.cfg.Claude.Model, "work_dir", a.cfg.Repo.WorkDir)
@@ -208,7 +276,48 @@ func (a *App) doIngest(ctx context.Context, stats *CycleStats) error {
 	a.log.Info("ingestion complete", "new_items_inserted", inserted, "duplicates_skipped", len(a.reviewItems)-inserted)
 	stats.ItemsInserted = inserted
 	a.reviewItems = nil
+
+	// Create GitHub issues for new items when configured
+	if a.cfg.GitHub.CreateIssues && !a.dryRun && inserted > 0 {
+		a.createIssuesForNewItems(ctx, stats)
+	}
+
 	return nil
+}
+
+func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
+	status := backlog.StatusPending
+	zeroIssue := 0
+	items, err := a.store.List(ctx, backlog.ListFilter{
+		Status:      &status,
+		RepoURL:     &a.cfg.Repo.URL,
+		IssueNumber: &zeroIssue,
+	})
+	if err != nil {
+		a.log.Warn("failed to list items for issue creation", "error", err)
+		return
+	}
+
+	label := a.cfg.GitHub.IssueLabel
+	for _, item := range items {
+		body := fmt.Sprintf("**%s**\n\n%s\n\n**File:** `%s`\n**Priority:** %s\n**Category:** %s\n\n---\n*Created by [autobacklog](https://github.com/jamesreagan/autobacklog)*",
+			item.Title, item.Description, item.FilePath, item.Priority, item.Category)
+
+		issueNum, err := a.issueManager.CreateIssue(ctx, a.repo.WorkDir(), item.Title, body, []string{label})
+		if err != nil {
+			a.log.Warn("failed to create GitHub issue", "title", item.Title, "error", err)
+			continue
+		}
+
+		item.IssueNumber = issueNum
+		if err := a.store.Update(ctx, item); err != nil {
+			a.log.Warn("failed to update item with issue number", "title", item.Title, "error", err)
+			continue
+		}
+
+		stats.IssuesCreated++
+		a.log.Info("created GitHub issue", "title", item.Title, "issue_number", issueNum)
+	}
 }
 
 func (a *App) doEvaluateThreshold(ctx context.Context, stats *CycleStats) error {
@@ -370,7 +479,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	}
 
 	a.log.Info("creating pull request", "title", item.Title, "base", a.cfg.Repo.Branch, "head", branchName)
-	prBody := gh.FormatPRBody(item.Title, item.Description, string(item.Category), testResult)
+	prBody := gh.FormatPRBody(item.Title, item.Description, string(item.Category), testResult, item.IssueNumber)
 	prURL, err := a.prCreator.CreatePR(ctx, a.repo.WorkDir(), gh.PRRequest{
 		Title:      fmt.Sprintf("[autobacklog] %s", item.Title),
 		Body:       prBody,

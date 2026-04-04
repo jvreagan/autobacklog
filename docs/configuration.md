@@ -18,8 +18,18 @@ Autobacklog is configured via a YAML file. All `${VAR}` references are interpola
 | `pat` | string | | GitHub Personal Access Token (inline) |
 | `pat_file` | string | | Path to file containing PAT |
 | `auto_merge` | bool | `false` | Auto-merge PRs via `gh pr merge --squash --auto` after CI passes |
+| `create_issues` | bool | `false` | Create a GitHub issue for each new backlog item during ingest |
+| `issue_label` | string | `autobacklog` | Label used to import issues and tag created issues |
 
 Falls back to `GITHUB_TOKEN` environment variable if neither is set.
+
+### GitHub Issues Integration
+
+When `create_issues` is enabled, autobacklog creates a GitHub issue for every new finding ingested into the backlog. The issue includes the description, file path, priority, and category.
+
+Conversely, any open issue with the configured `issue_label` is automatically imported into the backlog during the IMPORT_ISSUES state. This enables team members to file issues with the label for autobacklog to pick up and implement.
+
+When a PR is created for an item that has a linked issue, the PR body includes `Fixes #N` so GitHub auto-closes the issue on merge.
 
 ## `claude`
 

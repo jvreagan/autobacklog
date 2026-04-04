@@ -23,6 +23,8 @@ github:
   pat: "${GITHUB_TOKEN}"
   # pat_file: "/home/user/.github-pat"
   auto_merge: false                    # enable to auto-merge PRs after CI passes
+  create_issues: false                 # create GitHub issues for new backlog items
+  issue_label: "autobacklog"           # label for importing/creating issues
 
 # -----------------------------------------------------------------------------
 # Claude Code CLI

@@ -332,6 +332,76 @@ func TestSQLiteStore_DeleteStale_OnlyTerminalStatuses(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_IssueNumber_RoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	item := NewItem("Issue item", "desc", "f.go", PriorityHigh, CategoryBug)
+	item.IssueNumber = 42
+
+	if err := store.Insert(ctx, item); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	got, err := store.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.IssueNumber != 42 {
+		t.Errorf("IssueNumber = %d, want 42", got.IssueNumber)
+	}
+
+	// Update the issue number
+	got.IssueNumber = 99
+	if err := store.Update(ctx, got); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got2, _ := store.Get(ctx, item.ID)
+	if got2.IssueNumber != 99 {
+		t.Errorf("IssueNumber after update = %d, want 99", got2.IssueNumber)
+	}
+}
+
+func TestSQLiteStore_ListFilterByIssueNumber(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	item1 := NewItem("No issue", "desc", "a.go", PriorityHigh, CategoryBug)
+	item1.IssueNumber = 0
+	store.Insert(ctx, item1)
+
+	item2 := NewItem("Has issue", "desc", "b.go", PriorityHigh, CategoryBug)
+	item2.IssueNumber = 10
+	store.Insert(ctx, item2)
+
+	// Filter for items with issue_number=0 (no issue)
+	zero := 0
+	items, err := store.List(ctx, ListFilter{IssueNumber: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len = %d, want 1", len(items))
+	}
+	if items[0].Title != "No issue" {
+		t.Errorf("Title = %q, want 'No issue'", items[0].Title)
+	}
+
+	// Filter for items with issue_number=10
+	ten := 10
+	items2, err := store.List(ctx, ListFilter{IssueNumber: &ten})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items2) != 1 {
+		t.Fatalf("len = %d, want 1", len(items2))
+	}
+	if items2[0].Title != "Has issue" {
+		t.Errorf("Title = %q, want 'Has issue'", items2[0].Title)
+	}
+}
+
 func TestSQLiteStore_MultiTenantIsolation(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

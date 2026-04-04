@@ -84,6 +84,11 @@ func runOnce(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
+	// If mode is "daemon", loop with the configured interval
+	if cfg.Mode == "daemon" {
+		return runDaemonLoop(ctx, cfg, orchestrator, log)
+	}
+
 	// Run one cycle
 	stats, err := orchestrator.RunCycle(ctx)
 	if err != nil {

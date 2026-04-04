@@ -47,6 +47,7 @@ type Item struct {
 	Description string    `json:"description"`
 	FilePath    string    `json:"file_path"`
 	LineNumber  int       `json:"line_number,omitempty"`
+	IssueNumber int       `json:"issue_number,omitempty"`
 	Priority    Priority  `json:"priority"`
 	Category    Category  `json:"category"`
 	Status      Status    `json:"status"`

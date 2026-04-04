@@ -38,3 +38,9 @@ type PRCreator interface {
 	CreatePR(ctx context.Context, workDir string, req gh.PRRequest) (string, error)
 	EnableAutoMerge(ctx context.Context, workDir string, prURL string) error
 }
+
+// IssueManager abstracts GitHub issue operations for testability.
+type IssueManager interface {
+	CreateIssue(ctx context.Context, workDir, title, body string, labels []string) (int, error)
+	ListIssues(ctx context.Context, workDir, label string) ([]gh.Issue, error)
+}

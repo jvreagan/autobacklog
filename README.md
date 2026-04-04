@@ -5,18 +5,19 @@ Autonomous code improvement daemon. Point it at a GitHub repo and it continuousl
 ## How It Works
 
 ```
-CLONE → REVIEW → INGEST → EVALUATE → IMPLEMENT → TEST → PR → DOCUMENT → (loop)
+CLONE → IMPORT_ISSUES → REVIEW → INGEST → EVALUATE → IMPLEMENT → TEST → PR → DOCUMENT → (loop)
 ```
 
 1. **Clone/Pull** the target repo
-2. **Review** the codebase using Claude Code CLI, producing structured findings
-3. **Ingest** findings into a local SQLite backlog, deduplicating per-repo against existing items
-4. **Evaluate** whether per-repo thresholds are met (high=immediate, medium≥3, low≥5)
-5. **Implement** selected items by invoking Claude to make code changes
-6. **Test** — auto-detect and run the test suite; retry up to 3x if tests fail
-7. **PR** — create a GitHub pull request with description and test results
-8. **Document** — update docs if needed
-9. **Loop** (daemon mode) or exit (oneshot mode)
+2. **Import Issues** — pull in open GitHub issues labeled `autobacklog` as work items
+3. **Review** the codebase using Claude Code CLI, producing structured findings
+4. **Ingest** findings into a local SQLite backlog, deduplicating per-repo against existing items; optionally create GitHub issues for each new finding
+5. **Evaluate** whether per-repo thresholds are met (high=immediate, medium≥3, low≥5)
+6. **Implement** selected items by invoking Claude to make code changes
+7. **Test** — auto-detect and run the test suite; retry up to 3x if tests fail
+8. **PR** — create a GitHub pull request with description and test results (auto-closes linked issues via `Fixes #N`)
+9. **Document** — update docs if needed
+10. **Loop** (daemon mode) or exit (oneshot mode)
 
 ## Quick Start
 
@@ -81,6 +82,20 @@ Key sections:
 
 Environment variables are interpolated with `${VAR}` syntax.
 
+## GitHub Issues Integration
+
+Autobacklog supports bidirectional sync with GitHub Issues:
+
+- **Inbound**: Open issues labeled `autobacklog` are imported as work items each cycle
+- **Outbound**: When `github.create_issues: true`, a GitHub issue is created for each new finding
+- **Auto-close**: PRs include `Fixes #N` to auto-close linked issues on merge
+
+```yaml
+github:
+  create_issues: true
+  issue_label: "autobacklog"
+```
+
 ## Test Framework Auto-Detection
 
 Autobacklog detects and runs tests automatically:
@@ -117,7 +132,7 @@ internal/
   claude/                         Claude Code CLI wrapper, prompts, parser
   config/                         YAML config loading with env var interpolation
   git/                            Clone, branch, commit operations
-  github/                         PR creation, auto-merge, and auth via gh CLI
+  github/                         PR creation, auto-merge, issue sync via gh CLI
   notify/                         Email notifications
   runner/                         Test framework detection and execution
   cli/                            Cobra CLI commands

@@ -110,6 +110,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Notifications.SMTP.Port == 0 {
 		cfg.Notifications.SMTP.Port = 587
 	}
+	if cfg.GitHub.IssueLabel == "" {
+		cfg.GitHub.IssueLabel = "autobacklog"
+	}
 }
 
 func validate(cfg *Config) error {

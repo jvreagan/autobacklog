@@ -30,9 +30,10 @@ type Store interface {
 
 // ListFilter specifies criteria for listing backlog items.
 type ListFilter struct {
-	Status   *Status
-	Priority *Priority
-	Category *Category
-	RepoURL  *string
-	Limit    int
+	Status      *Status
+	Priority    *Priority
+	Category    *Category
+	RepoURL     *string
+	IssueNumber *int
+	Limit       int
 }
