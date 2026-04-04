@@ -49,7 +49,7 @@ internal/
 ├── claude/       Claude Code CLI subprocess wrapper, prompts, JSON parser, budget tracker
 ├── config/       YAML loading, env var interpolation, validation, defaults
 ├── git/          Git operations: clone, branch, commit, push
-├── github/       PR creation and auto-merge via gh CLI, GitHub auth setup
+├── github/       PR creation, auto-merge, and issue sync via gh CLI
 ├── notify/       Notifier interface, SMTP email implementation
 ├── runner/       Test framework detection, test execution
 ├── cli/          Cobra commands (run, daemon, status, init, version)

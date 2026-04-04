@@ -39,6 +39,8 @@ repo:
 
 github:
   pat: "${GITHUB_TOKEN}"
+  # create_issues: true              # optional: sync findings to GitHub Issues
+  # issue_label: "autobacklog"       # label for bidirectional issue sync
 ```
 
 Set your GitHub token:
