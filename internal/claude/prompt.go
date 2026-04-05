@@ -7,9 +7,14 @@ import (
 	"github.com/jamesreagan/autobacklog/internal/backlog"
 )
 
+// docsDirective instructs Claude to read the docs/ directory for project context.
+const docsDirective = `Before starting, read all files in the docs/ directory (if it exists) to understand the project's architecture, requirements, and conventions. Use that context to inform your analysis.
+
+`
+
 // ReviewPrompt generates a prompt for Claude to review a codebase.
 func ReviewPrompt() string {
-	return `Review this entire codebase for improvements. For each finding, output a JSON array of objects with these fields:
+	return docsDirective + `Review this entire codebase for improvements. For each finding, output a JSON array of objects with these fields:
 - "title": short description of the issue (string)
 - "description": detailed explanation and suggested fix (string)
 - "file_path": relative path to the file (string)
@@ -41,7 +46,7 @@ Output ONLY the JSON array, no other text. Example:
 
 // ImplementPrompt generates a prompt for Claude to implement a fix for a backlog item.
 func ImplementPrompt(item *backlog.Item) string {
-	return fmt.Sprintf(`Implement the following improvement:
+	return docsDirective + fmt.Sprintf(`Implement the following improvement:
 
 Title: %s
 Description: %s
@@ -67,7 +72,7 @@ Do not disable or skip tests.`, testOutput)
 // DocumentPrompt generates a prompt for Claude to update documentation.
 func DocumentPrompt(changes []string) string {
 	changeList := strings.Join(changes, "\n- ")
-	return fmt.Sprintf(`The following changes were made to the codebase:
+	return docsDirective + fmt.Sprintf(`The following changes were made to the codebase:
 - %s
 
 Review and update any documentation (README, doc comments, etc.) that should reflect these changes.
