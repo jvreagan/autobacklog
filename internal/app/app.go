@@ -194,11 +194,12 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	return stats, nil
 }
 
-// RunBurndown loops RunCycle until the backlog is drained (no items implemented
-// in a cycle). Returns cumulative stats across all cycles.
+// RunBurndown loops RunCycle until the backlog is drained (no pending items
+// remain). Returns cumulative stats across all cycles.
 func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
-	// Count total pending items for progress logging.
 	pendingStatus := backlog.StatusPending
+
+	// Count total pending items for progress logging.
 	pending, err := a.store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
 	if err != nil {
 		return nil, fmt.Errorf("listing pending items: %w", err)
@@ -209,16 +210,34 @@ func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
 
 	var cumulative CycleStats
 	for cycle := 1; ; cycle++ {
-		a.log.Info("[burndown] starting cycle", "cycle", cycle, "remaining", a.burndownTotal-a.burndownDone)
+		// Check how many pending items actually remain in the store.
+		remaining, err := a.store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
+		if err != nil {
+			return &cumulative, fmt.Errorf("checking remaining items: %w", err)
+		}
+		if len(remaining) == 0 {
+			a.log.Info("[burndown] backlog drained", "total_cycles", cycle-1, "items_addressed", a.burndownDone, "total", a.burndownTotal)
+			break
+		}
+
+		a.log.Info("[burndown] starting cycle", "cycle", cycle, "remaining", len(remaining))
 		stats, err := a.RunCycle(ctx)
 		if err != nil {
 			cumulative.Merge(stats)
 			return &cumulative, err
 		}
 		cumulative.Merge(stats)
+
+		// If nothing was implemented and nothing changed status, we're stuck — stop
+		// to avoid an infinite loop (all remaining items are failing/skipping).
 		if stats.ItemsImplemented == 0 {
-			a.log.Info("[burndown] backlog drained", "total_cycles", cycle, "items_addressed", a.burndownDone, "total", a.burndownTotal)
-			break
+			afterCycle, _ := a.store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
+			if len(afterCycle) == len(remaining) {
+				a.log.Warn("[burndown] no progress made, stopping", "pending_remaining", len(afterCycle))
+				break
+			}
+			// Items moved to failed/skipped — still making progress, continue.
+			a.log.Info("[burndown] items failed/skipped but pending items remain, continuing")
 		}
 	}
 	a.burndownTotal = 0
