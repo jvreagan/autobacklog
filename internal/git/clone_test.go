@@ -196,6 +196,48 @@ func TestCreateBranch(t *testing.T) {
 	}
 }
 
+func TestCreateBranch_AlreadyExists(t *testing.T) {
+	bare := initBareRepo(t)
+	workDir := filepath.Join(t.TempDir(), "clone-target")
+	r := NewRepo(bare, "main", workDir, "", slog.Default())
+
+	ctx := context.Background()
+	if err := r.CloneOrPull(ctx); err != nil {
+		t.Fatalf("CloneOrPull: %v", err)
+	}
+
+	// Create the branch for the first time.
+	branchName, err := r.CreateBranch(ctx, "autobacklog", "bug", "Fix Null Pointer")
+	if err != nil {
+		t.Fatalf("first CreateBranch: %v", err)
+	}
+
+	// Switch back to main to simulate a crash-then-restart scenario.
+	if err := r.CheckoutBranch(ctx, "main"); err != nil {
+		t.Fatalf("CheckoutBranch main: %v", err)
+	}
+
+	// Calling CreateBranch again for the same item should succeed (reuse).
+	got, err := r.CreateBranch(ctx, "autobacklog", "bug", "Fix Null Pointer")
+	if err != nil {
+		t.Fatalf("second CreateBranch (should reuse existing): %v", err)
+	}
+	if got != branchName {
+		t.Errorf("branch name = %q, want %q", got, branchName)
+	}
+
+	// Verify we are now on the branch.
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse: %v", err)
+	}
+	if actual := strings.TrimSpace(string(out)); actual != branchName {
+		t.Errorf("HEAD branch = %q, want %q", actual, branchName)
+	}
+}
+
 func TestHasChanges_Integration(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
