@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -67,7 +68,8 @@ func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputBytes}
-	cmd.Stderr = &limitedWriter{w: &stderr, limit: maxOutputBytes}
+	// Stream stderr to terminal so the user sees progress during JSON-mode calls
+	cmd.Stderr = io.MultiWriter(&limitedWriter{w: &stderr, limit: maxOutputBytes}, os.Stderr)
 
 	err := cmd.Run()
 	if err != nil {
@@ -117,8 +119,9 @@ func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, 
 	cmd.Env = filteredEnv()
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputBytes}
-	cmd.Stderr = &limitedWriter{w: &stderr, limit: maxOutputBytes}
+	// Stream both stdout and stderr to the terminal so the user sees Claude's progress
+	cmd.Stdout = io.MultiWriter(&limitedWriter{w: &stdout, limit: maxOutputBytes}, os.Stdout)
+	cmd.Stderr = io.MultiWriter(&limitedWriter{w: &stderr, limit: maxOutputBytes}, os.Stderr)
 
 	err := cmd.Run()
 	if err != nil {
