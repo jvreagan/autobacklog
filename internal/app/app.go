@@ -28,9 +28,11 @@ type App struct {
 	notifier      notify.Notifier
 	log           *slog.Logger
 	dryRun        bool
-	reviewItems   []*backlog.Item    // transient: review → ingest
-	selectedItems []*backlog.Item    // transient: threshold → implement
-	cachedDetect  *runner.DetectResult // cached test framework per cycle
+	reviewItems      []*backlog.Item      // transient: review → ingest
+	selectedItems    []*backlog.Item      // transient: threshold → implement
+	cachedDetect     *runner.DetectResult // cached test framework per cycle
+	burndownTotal    int                  // total pending items at burndown start
+	burndownDone     int                  // items addressed so far in burndown
 }
 
 // defaultPRCreator wraps the free functions in the github package.
@@ -195,9 +197,19 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 // RunBurndown loops RunCycle until the backlog is drained (no items implemented
 // in a cycle). Returns cumulative stats across all cycles.
 func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
+	// Count total pending items for progress logging.
+	pendingStatus := backlog.StatusPending
+	pending, err := a.store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
+	if err != nil {
+		return nil, fmt.Errorf("listing pending items: %w", err)
+	}
+	a.burndownTotal = len(pending)
+	a.burndownDone = 0
+	a.log.Info("[burndown] starting", "pending_items", a.burndownTotal)
+
 	var cumulative CycleStats
 	for cycle := 1; ; cycle++ {
-		a.log.Info("[burndown] starting cycle", "cycle", cycle)
+		a.log.Info("[burndown] starting cycle", "cycle", cycle, "remaining", a.burndownTotal-a.burndownDone)
 		stats, err := a.RunCycle(ctx)
 		if err != nil {
 			cumulative.Merge(stats)
@@ -205,10 +217,12 @@ func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
 		}
 		cumulative.Merge(stats)
 		if stats.ItemsImplemented == 0 {
-			a.log.Info("[burndown] backlog drained", "total_cycles", cycle)
+			a.log.Info("[burndown] backlog drained", "total_cycles", cycle, "items_addressed", a.burndownDone, "total", a.burndownTotal)
 			break
 		}
 	}
+	a.burndownTotal = 0
+	a.burndownDone = 0
 	return &cumulative, nil
 }
 
@@ -465,7 +479,12 @@ func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 
 	a.log.Info("beginning implementation", "items_to_implement", len(a.selectedItems))
 	for i, item := range a.selectedItems {
-		a.log.Info("implementing item", "index", i+1, "of", len(a.selectedItems), "title", item.Title)
+		if a.burndownTotal > 0 {
+			a.burndownDone++
+			a.log.Info(fmt.Sprintf("[burndown] addressing item %d of %d: %s", a.burndownDone, a.burndownTotal, item.Title))
+		} else {
+			a.log.Info("implementing item", "index", i+1, "of", len(a.selectedItems), "title", item.Title)
+		}
 		if err := a.implementItem(ctx, item, stats); err != nil {
 			a.log.Error("failed to implement item", "title", item.Title, "error", err)
 			stats.Errors = append(stats.Errors, err)
