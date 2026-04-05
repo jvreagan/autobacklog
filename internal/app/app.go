@@ -711,8 +711,9 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item) (string
 	var args []string
 
 	if a.cfg.Testing.OverrideCommand != "" {
-		command = "sh"
-		args = []string{"-c", a.cfg.Testing.OverrideCommand}
+		parts := strings.Fields(a.cfg.Testing.OverrideCommand)
+		command = parts[0]
+		args = parts[1:]
 		a.log.Info("using override test command", "command", a.cfg.Testing.OverrideCommand)
 	} else if a.cfg.Testing.AutoDetect {
 		// Cache detection result to avoid redundant filesystem checks per item.

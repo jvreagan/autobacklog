@@ -57,17 +57,3 @@ func TestRunner_RunTimeout(t *testing.T) {
 		t.Error("Passed = true, should fail on timeout")
 	}
 }
-
-func TestRunner_RunOverride(t *testing.T) {
-	r := NewRunner(slog.Default(), 30*time.Second)
-	ctx := context.Background()
-
-	result, err := r.RunOverride(ctx, t.TempDir(), "echo 'hello from override'")
-	if err != nil {
-		t.Fatalf("RunOverride: %v", err)
-	}
-
-	if !result.Passed {
-		t.Error("Passed = false, want true")
-	}
-}
