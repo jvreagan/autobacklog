@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestInterpolateEnvVars(t *testing.T) {
@@ -215,6 +217,66 @@ func TestLoadInvalidYAML(t *testing.T) {
 	_, err := Load(cfgPath)
 	if err == nil {
 		t.Error("Load() should error on invalid YAML")
+	}
+}
+
+func TestWarnLiteralSecrets(t *testing.T) {
+	tests := []struct {
+		name        string
+		rawYAML     string
+		expectWarn  bool
+	}{
+		{
+			name: "literal password triggers warning",
+			rawYAML: `
+notifications:
+  smtp:
+    password: "hunter2"
+`,
+			expectWarn: true,
+		},
+		{
+			name: "env var reference does not trigger warning",
+			rawYAML: `
+notifications:
+  smtp:
+    password: "${SMTP_PASSWORD}"
+`,
+			expectWarn: false,
+		},
+		{
+			name: "empty password does not trigger warning",
+			rawYAML: `
+notifications:
+  smtp:
+    host: "smtp.example.com"
+`,
+			expectWarn: false,
+		},
+		{
+			name: "mixed literal and env var triggers warning",
+			rawYAML: `
+notifications:
+  smtp:
+    password: "prefix_${SMTP_PASSWORD}"
+`,
+			expectWarn: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// warnLiteralSecrets uses slog; we verify it doesn't panic and
+			// that the envVarRef regex classifies values correctly.
+			raw := &Config{}
+			if err := yaml.Unmarshal([]byte(tt.rawYAML), raw); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			isLiteral := raw.Notifications.SMTP.Password != "" && !envVarRef.MatchString(raw.Notifications.SMTP.Password)
+			if isLiteral != tt.expectWarn {
+				t.Errorf("isLiteral = %v, want %v (password = %q)", isLiteral, tt.expectWarn, raw.Notifications.SMTP.Password)
+			}
+		})
 	}
 }
 

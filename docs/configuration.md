@@ -95,7 +95,7 @@ Can also be set via `--helper-mode` CLI flag.
 | `host` | string | | SMTP server hostname |
 | `port` | int | `587` | SMTP port |
 | `username` | string | | SMTP username |
-| `password` | string | | SMTP password |
+| `password` | string | | SMTP password — **use `${SMTP_PASSWORD}`** to avoid storing credentials in plain text |
 | `from` | string | | Sender email address |
 
 ### `notifications.recipients`
