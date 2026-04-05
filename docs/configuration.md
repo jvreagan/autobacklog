@@ -70,7 +70,7 @@ String: `oneshot` (default) or `daemon`.
 String: `buildbacklog` (default) or `burndown`.
 
 - **`buildbacklog`** — full pipeline: review → ingest → evaluate → implement (one cycle per run)
-- **`burndown`** — skip review and ingest, loop cycles until the backlog is fully drained (no pending items remain)
+- **`burndown`** — skip review and ingest, bypass priority thresholds, loop cycles until the backlog is fully drained (no pending items remain)
 
 Burndown behavior by mode:
 

@@ -25,6 +25,7 @@ CLONE → IMPORT_ISSUES → REVIEW → INGEST → EVALUATE_THRESHOLD → IMPLEME
 - Medium-priority count ≥ threshold → implement batch
 - Low-priority count ≥ threshold → implement batch
 - Results capped at `max_per_cycle`
+- In **burndown mode**, thresholds are bypassed — all pending items are selected (up to `max_per_cycle`)
 
 **IMPLEMENT** — For each selected item:
 1. Creates a feature branch (`autobacklog/<category>/<title-slug>`)
