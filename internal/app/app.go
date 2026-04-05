@@ -671,10 +671,13 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		}
 	}
 
-	// Return to main branch for next item
+	// Return to main branch and clean up local feature branch
 	a.log.Info("returning to base branch", "branch", a.cfg.Repo.Branch)
 	if err := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); err != nil {
 		return fmt.Errorf("checkout main branch after PR: %w", err)
+	}
+	if err := a.repo.DeleteBranch(ctx, branchName); err != nil {
+		a.log.Warn("failed to delete local branch", "branch", branchName, "error", err)
 	}
 
 	return nil

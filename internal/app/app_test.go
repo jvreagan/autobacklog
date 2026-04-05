@@ -34,6 +34,7 @@ type mockRepo struct {
 	hasChangesVal    bool
 	hasChangesErr    error
 	revertErr        error
+	deleteBranchErr  error
 
 	cloneOrPullCalls  int
 	createBranchCalls int
@@ -42,6 +43,7 @@ type mockRepo struct {
 	stageAllCalls     int
 	commitCalls       int
 	hasChangesCalls   int
+	deleteBranchCalls int
 	revertCalls       int
 }
 
@@ -73,6 +75,10 @@ func (m *mockRepo) HasChanges(_ context.Context) (bool, error) {
 	return m.hasChangesVal, m.hasChangesErr
 }
 func (m *mockRepo) RevertToClean(_ context.Context) error { m.revertCalls++; return m.revertErr }
+func (m *mockRepo) DeleteBranch(_ context.Context, _ string) error {
+	m.deleteBranchCalls++
+	return m.deleteBranchErr
+}
 
 type mockAIClient struct {
 	runOutputs     []string

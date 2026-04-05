@@ -19,6 +19,7 @@ type Repository interface {
 	Commit(ctx context.Context, message string) error
 	HasChanges(ctx context.Context) (bool, error)
 	RevertToClean(ctx context.Context) error
+	DeleteBranch(ctx context.Context, branch string) error
 }
 
 // AIClient abstracts the Claude CLI client for testability.

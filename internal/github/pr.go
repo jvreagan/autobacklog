@@ -52,7 +52,7 @@ func CreatePR(ctx context.Context, workDir string, req PRRequest, log *slog.Logg
 func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slog.Logger) error {
 	log.Info("enabling auto-merge", "pr", prURL)
 
-	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", prURL, "--squash", "--auto")
+	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", prURL, "--squash", "--auto", "--delete-branch")
 	cmd.Dir = workDir
 	cmd.Env = ghEnv()
 
