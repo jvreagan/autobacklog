@@ -48,13 +48,19 @@ func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.Ap
 			}
 		}
 
-		stats, err := orchestrator.RunCycle(ctx)
-		if err != nil {
+		var stats *app.CycleStats
+		var runErr error
+		if cfg.HelperMode == "burndown" {
+			stats, runErr = orchestrator.RunBurndown(ctx)
+		} else {
+			stats, runErr = orchestrator.RunCycle(ctx)
+		}
+		if runErr != nil {
 			if ctx.Err() != nil {
 				log.Info("daemon stopped by signal")
 				return nil
 			}
-			log.Error("cycle failed", "error", err)
+			log.Error("cycle failed", "error", runErr)
 		} else {
 			log.Info("cycle complete",
 				"items_found", stats.ItemsFound,

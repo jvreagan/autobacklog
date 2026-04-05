@@ -413,6 +413,86 @@ func TestRunCycle_Burndown_SkipsReviewAndIngest(t *testing.T) {
 	}
 }
 
+func TestRunBurndown_LoopsUntilDrained(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.HelperMode = "burndown"
+	store := a.store
+
+	// Insert two pending items so the first cycle finds work.
+	item1 := backlog.NewItem("fix alpha", "desc", "a.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item1.RepoURL = a.cfg.Repo.URL
+	item2 := backlog.NewItem("fix beta", "desc", "b.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item2.RepoURL = a.cfg.Repo.URL
+	if err := store.Insert(context.Background(), item1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Insert(context.Background(), item2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mock AI: RunPrint called once per item (implement) + optionally doc.
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"ok", "ok", "ok", "ok", "ok", "ok"}
+
+	// Mock test runner: always pass (one result per item).
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{
+		{Passed: true, Output: "all pass"},
+		{Passed: true, Output: "all pass"},
+	}
+
+	stats, err := a.RunBurndown(context.Background())
+	if err != nil {
+		t.Fatalf("RunBurndown: %v", err)
+	}
+
+	// Should have implemented exactly 2 items across cycle(s), then a final
+	// cycle with 0 implementations causing the loop to exit.
+	if stats.ItemsImplemented != 2 {
+		t.Errorf("ItemsImplemented = %d, want 2", stats.ItemsImplemented)
+	}
+	if stats.PRsCreated != 2 {
+		t.Errorf("PRsCreated = %d, want 2", stats.PRsCreated)
+	}
+}
+
+func TestRunBurndown_EmptyBacklog(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.HelperMode = "burndown"
+
+	// No items in backlog — should exit after one cycle.
+	stats, err := a.RunBurndown(context.Background())
+	if err != nil {
+		t.Fatalf("RunBurndown: %v", err)
+	}
+	if stats.ItemsImplemented != 0 {
+		t.Errorf("ItemsImplemented = %d, want 0", stats.ItemsImplemented)
+	}
+}
+
+func TestCycleStats_Merge(t *testing.T) {
+	a := &CycleStats{ItemsFound: 3, ItemsImplemented: 2, PRsCreated: 2}
+	b := &CycleStats{ItemsFound: 1, ItemsImplemented: 0, Errors: []error{errors.New("x")}}
+	a.Merge(b)
+	if a.ItemsFound != 4 {
+		t.Errorf("ItemsFound = %d, want 4", a.ItemsFound)
+	}
+	if a.ItemsImplemented != 2 {
+		t.Errorf("ItemsImplemented = %d, want 2", a.ItemsImplemented)
+	}
+	if len(a.Errors) != 1 {
+		t.Errorf("Errors = %d, want 1", len(a.Errors))
+	}
+}
+
+func TestCycleStats_Merge_Nil(t *testing.T) {
+	a := &CycleStats{ItemsFound: 3}
+	a.Merge(nil)
+	if a.ItemsFound != 3 {
+		t.Errorf("ItemsFound = %d, want 3", a.ItemsFound)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // doClone tests
 // ---------------------------------------------------------------------------

@@ -108,6 +108,24 @@ type CycleStats struct {
 	BudgetSummary    string
 }
 
+// Merge accumulates totals from another CycleStats into the receiver.
+func (s *CycleStats) Merge(other *CycleStats) {
+	if other == nil {
+		return
+	}
+	s.ItemsFound += other.ItemsFound
+	s.ItemsInserted += other.ItemsInserted
+	s.ItemsImplemented += other.ItemsImplemented
+	s.IssuesImported += other.IssuesImported
+	s.IssuesCreated += other.IssuesCreated
+	s.PRsCreated += other.PRsCreated
+	s.PRsAutoMerged += other.PRsAutoMerged
+	s.TestFailures += other.TestFailures
+	s.Errors = append(s.Errors, other.Errors...)
+	s.Items = append(s.Items, other.Items...)
+	s.BudgetSummary = other.BudgetSummary
+}
+
 // Summary returns a human-readable summary of the cycle.
 func (s *CycleStats) Summary() string {
 	if len(s.Items) == 0 {

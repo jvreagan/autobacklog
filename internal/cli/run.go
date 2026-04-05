@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jamesreagan/autobacklog/internal/app"
 	"github.com/jamesreagan/autobacklog/internal/logging"
 )
 
@@ -30,8 +31,13 @@ func runOnce(cmd *cobra.Command, args []string) error {
 		return runDaemonLoop(s.ctx, s.cfg, s.orchestrator, s.log)
 	}
 
-	// Run one cycle
-	stats, err := s.orchestrator.RunCycle(s.ctx)
+	// Run one cycle (or loop in burndown mode)
+	var stats *app.CycleStats
+	if s.cfg.HelperMode == "burndown" {
+		stats, err = s.orchestrator.RunBurndown(s.ctx)
+	} else {
+		stats, err = s.orchestrator.RunCycle(s.ctx)
+	}
 	if err != nil {
 		return fmt.Errorf("cycle failed: %w", err)
 	}

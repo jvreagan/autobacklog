@@ -192,6 +192,26 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	return stats, nil
 }
 
+// RunBurndown loops RunCycle until the backlog is drained (no items implemented
+// in a cycle). Returns cumulative stats across all cycles.
+func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
+	var cumulative CycleStats
+	for cycle := 1; ; cycle++ {
+		a.log.Info("[burndown] starting cycle", "cycle", cycle)
+		stats, err := a.RunCycle(ctx)
+		if err != nil {
+			cumulative.Merge(stats)
+			return &cumulative, err
+		}
+		cumulative.Merge(stats)
+		if stats.ItemsImplemented == 0 {
+			a.log.Info("[burndown] backlog drained", "total_cycles", cycle)
+			break
+		}
+	}
+	return &cumulative, nil
+}
+
 func (a *App) doClone(ctx context.Context) error {
 	if a.dryRun {
 		a.log.Info("[dry-run] would clone/pull repo", "url", a.cfg.Repo.URL, "branch", a.cfg.Repo.Branch, "work_dir", a.cfg.Repo.WorkDir)
