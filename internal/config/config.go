@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -42,6 +43,8 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
 
+	warnLiteralSecrets(string(data))
+
 	expanded := interpolateEnvVars(string(data))
 
 	cfg := &Config{}
@@ -67,6 +70,21 @@ func interpolateEnvVars(input string) string {
 		}
 		return match
 	})
+}
+
+// envVarRef matches a value that is entirely a single ${VAR} reference.
+var envVarRef = regexp.MustCompile(`^\$\{[^}]+\}$`)
+
+// warnLiteralSecrets logs a warning if any sensitive config fields are set as
+// plain-text literals rather than ${VAR} env var references in the raw YAML.
+func warnLiteralSecrets(rawYAML string) {
+	raw := &Config{}
+	if err := yaml.Unmarshal([]byte(rawYAML), raw); err != nil {
+		return // YAML errors are reported later during the real parse
+	}
+	if raw.Notifications.SMTP.Password != "" && !envVarRef.MatchString(raw.Notifications.SMTP.Password) {
+		slog.Warn("notifications.smtp.password is stored as a plain-text literal in the config file; use ${SMTP_PASSWORD} to reference an environment variable instead")
+	}
 }
 
 func applyDefaults(cfg *Config) {
