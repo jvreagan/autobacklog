@@ -69,8 +69,15 @@ String: `oneshot` (default) or `daemon`.
 
 String: `buildbacklog` (default) or `burndown`.
 
-- **`buildbacklog`** — full pipeline: review → ingest → evaluate → implement
-- **`burndown`** — skip review and ingest, only implement existing backlog items
+- **`buildbacklog`** — full pipeline: review → ingest → evaluate → implement (one cycle per run)
+- **`burndown`** — skip review and ingest, loop cycles until the backlog is fully drained (no pending items remain)
+
+Burndown behavior by mode:
+
+| `mode` | Behavior |
+|--------|----------|
+| `oneshot` | Drain backlog (no sleep between cycles), then exit |
+| `daemon` | Drain backlog (no sleep between cycles), sleep for `daemon.interval`, repeat |
 
 Can also be set via `--helper-mode` CLI flag.
 
