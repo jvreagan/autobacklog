@@ -456,6 +456,33 @@ func TestRunBurndown_LoopsUntilDrained(t *testing.T) {
 	}
 }
 
+func TestRunBurndown_SelectsBelowThreshold(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.HelperMode = "burndown"
+	// Default medium threshold is 3, but we only have 1 medium item.
+	// Burndown should still select it.
+	store := a.store
+
+	item := backlog.NewItem("refactor widget", "desc", "w.go", backlog.PriorityMedium, backlog.CategoryRefactor)
+	item.RepoURL = a.cfg.Repo.URL
+	if err := store.Insert(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"ok", "ok", "ok"}
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: true, Output: "pass"}}
+
+	stats, err := a.RunBurndown(context.Background())
+	if err != nil {
+		t.Fatalf("RunBurndown: %v", err)
+	}
+	if stats.ItemsImplemented != 1 {
+		t.Errorf("ItemsImplemented = %d, want 1 (burndown should bypass thresholds)", stats.ItemsImplemented)
+	}
+}
+
 func TestRunBurndown_EmptyBacklog(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.HelperMode = "burndown"

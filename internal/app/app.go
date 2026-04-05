@@ -430,6 +430,11 @@ func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
 }
 
 func (a *App) doEvaluateThreshold(ctx context.Context, stats *CycleStats) error {
+	// In burndown mode, skip threshold logic — select all pending items up to max_per_cycle.
+	if a.cfg.HelperMode == "burndown" {
+		return a.doSelectAllPending(ctx)
+	}
+
 	a.log.Info("evaluating backlog thresholds",
 		"high_threshold", a.cfg.Backlog.HighThreshold,
 		"medium_threshold", a.cfg.Backlog.MediumThreshold,
@@ -461,6 +466,33 @@ func (a *App) doEvaluateThreshold(ctx context.Context, stats *CycleStats) error 
 		a.log.Info("selected for implementation", "index", i+1, "title", item.Title, "priority", item.Priority)
 	}
 	a.selectedItems = result.SelectedItems
+	return nil
+}
+
+// doSelectAllPending selects all pending items for the current repo, capped at max_per_cycle.
+// Used in burndown mode to bypass threshold logic.
+func (a *App) doSelectAllPending(ctx context.Context) error {
+	pendingStatus := backlog.StatusPending
+	items, err := a.store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
+	if err != nil {
+		return fmt.Errorf("listing pending items: %w", err)
+	}
+
+	if len(items) == 0 {
+		a.log.Info("[burndown] no pending items remaining")
+		a.selectedItems = nil
+		return nil
+	}
+
+	if a.cfg.Backlog.MaxPerCycle > 0 && len(items) > a.cfg.Backlog.MaxPerCycle {
+		items = items[:a.cfg.Backlog.MaxPerCycle]
+	}
+
+	a.log.Info("[burndown] selected all pending items", "count", len(items))
+	for i, item := range items {
+		a.log.Info("selected for implementation", "index", i+1, "title", item.Title, "priority", item.Priority)
+	}
+	a.selectedItems = items
 	return nil
 }
 
