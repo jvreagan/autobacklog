@@ -74,7 +74,7 @@ The production constructor `New()` builds concrete implementations and delegates
 Uses `modernc.org/sqlite` (pure Go) instead of `github.com/mattn/go-sqlite3` to avoid CGo dependency, making cross-compilation simpler.
 
 ### Claude Code CLI as Subprocess
-Rather than using the API directly, we invoke the `claude` CLI as a subprocess. This leverages Claude Code's built-in capabilities (file editing, context management) and respects per-invocation budget caps.
+Rather than using the API directly, we invoke the `claude` CLI as a subprocess. This leverages Claude Code's built-in capabilities (file editing, context management) and respects per-invocation budget caps. CLI output is streamed to the terminal in real time so the user can follow progress — implementation calls stream both stdout and stderr, while review calls stream stderr only since stdout contains structured JSON.
 
 ### Budget Safety
 Two-level budget control:

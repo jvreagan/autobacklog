@@ -79,6 +79,8 @@ Burndown behavior by mode:
 | `oneshot` | Drain backlog (no sleep between cycles), then exit |
 | `daemon` | Drain backlog (no sleep between cycles), sleep for `daemon.interval`, repeat |
 
+During burndown, progress is logged per item (e.g., `[burndown] addressing item 3 of 10: Fix widget bug`) so you can track how far along the drain is.
+
 Can also be set via `--helper-mode` CLI flag.
 
 ## `daemon`
