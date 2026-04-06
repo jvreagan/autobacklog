@@ -82,6 +82,9 @@ logging:
   level: "info"                   # debug, info, warn, error
   # file: "/var/log/autobacklog.log"
   format: "text"                  # text or json
+
+webui:
+  port: 0                         # 0 = disabled; set to e.g. 8080 to enable real-time web UI
 `
 
 func runInit(cmd *cobra.Command, args []string) error {

@@ -180,6 +180,15 @@ func validate(cfg *Config) error {
 	if strings.Contains(cfg.Claude.Binary, "..") {
 		return fmt.Errorf("claude.binary must not contain path traversal (..), got %q", cfg.Claude.Binary)
 	}
+	if strings.HasPrefix(cfg.Claude.Binary, "/") || strings.HasPrefix(cfg.Claude.Binary, "~") {
+		return fmt.Errorf("claude.binary must be a bare command name (not an absolute path), got %q", cfg.Claude.Binary)
+	}
+	if cfg.Claude.MaxBudgetPerCall > cfg.Claude.MaxBudgetTotal {
+		return fmt.Errorf("claude.max_budget_per_call ($%.2f) must not exceed claude.max_budget_total ($%.2f)", cfg.Claude.MaxBudgetPerCall, cfg.Claude.MaxBudgetTotal)
+	}
+	if cfg.WebUI.Port < 0 || cfg.WebUI.Port > 65535 {
+		return fmt.Errorf("webui.port must be 0-65535, got %d", cfg.WebUI.Port)
+	}
 	if cfg.Notifications.Enabled {
 		if cfg.Notifications.SMTP.Host == "" {
 			return fmt.Errorf("notifications.smtp.host is required when notifications are enabled")

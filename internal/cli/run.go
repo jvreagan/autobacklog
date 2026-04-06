@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -25,6 +26,9 @@ func runOnce(cmd *cobra.Command, args []string) error {
 	defer logging.Cleanup()
 	defer s.store.Close()
 	defer s.cancel()
+	if s.uiServer != nil {
+		defer s.uiServer.Shutdown(context.Background())
+	}
 
 	// If mode is "daemon", loop with the configured interval
 	if s.cfg.Mode == "daemon" {

@@ -14,6 +14,7 @@ type Config struct {
 	Daemon        DaemonConfig        `yaml:"daemon"`
 	Notifications NotificationsConfig `yaml:"notifications"`
 	Logging       LoggingConfig       `yaml:"logging"`
+	WebUI         WebUIConfig         `yaml:"webui"`
 }
 
 // RepoConfig defines the target repository settings.
@@ -98,4 +99,9 @@ type LoggingConfig struct {
 	Level  string `yaml:"level"`  // Log level: "debug", "info", "warn", "error"; default "info"
 	File   string `yaml:"file"`   // Optional log file path (also logs to stderr)
 	Format string `yaml:"format"` // Output format: "text" or "json"; default "text"
+}
+
+// WebUIConfig controls the optional real-time web status UI.
+type WebUIConfig struct {
+	Port int `yaml:"port"` // HTTP port for web UI; 0 = disabled (default)
 }

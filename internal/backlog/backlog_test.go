@@ -14,34 +14,6 @@ func newTestManager(t *testing.T) (*Manager, *SQLiteStore) {
 	return mgr, store
 }
 
-func TestSimilarText(t *testing.T) {
-	tests := []struct {
-		a, b string
-		want bool
-	}{
-		{"Fix bug", "Fix bug", true},
-		{"Fix bug", "fix bug", true},
-		{"Fix bug in handler", "Fix bug", false},       // short titles: no substring match
-		{"Fix bug", "Fix bug in handler", false},        // short titles: no substring match
-		{"Fix bug", "Add feature", false},
-		{"  Fix bug  ", "fix bug", true},
-		{"", "", true},
-		{"abc", "xyz", false},
-		// Long titles: substring matching applies (>= 20 chars)
-		{"Refactor authentication handler logic", "Refactor authentication handler", true},
-		{"Refactor authentication handler", "Refactor authentication handler logic", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.a+"_vs_"+tt.b, func(t *testing.T) {
-			got := similarText(tt.a, tt.b)
-			if got != tt.want {
-				t.Errorf("similarText(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestManager_IngestAllNew(t *testing.T) {
 	mgr, _ := newTestManager(t)
 	ctx := context.Background()
@@ -168,13 +140,6 @@ func TestManager_Ingest_NilSlice(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("inserted = %d, want 0", n)
-	}
-}
-
-func TestSimilarText_NegativeCase(t *testing.T) {
-	// "Fix bug" vs "Fix typo" — neither contains the other, not equal
-	if similarText("Fix bug", "Fix typo") {
-		t.Error("'Fix bug' and 'Fix typo' should NOT be similar")
 	}
 }
 

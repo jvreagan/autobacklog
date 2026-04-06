@@ -55,6 +55,10 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	// Limit to one open connection to serialize all writes and prevent
+	// SQLITE_BUSY errors. SQLite supports only one writer at a time.
+	db.SetMaxOpenConns(1)
+
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
 		db.Close()
@@ -140,7 +144,14 @@ func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, err
 	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at FROM backlog_items WHERE 1=1`
 	args := []any{}
 
-	if filter.Status != nil {
+	if len(filter.Statuses) > 0 {
+		placeholders := make([]string, len(filter.Statuses))
+		for i, s := range filter.Statuses {
+			placeholders[i] = "?"
+			args = append(args, s)
+		}
+		query += ` AND status IN (` + strings.Join(placeholders, ",") + `)`
+	} else if filter.Status != nil {
 		query += ` AND status=?`
 		args = append(args, *filter.Status)
 	}
@@ -186,10 +197,15 @@ func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, err
 }
 
 // Delete removes an item by ID from the SQLite store.
+// Returns an error if the item does not exist (zero rows affected).
 func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM backlog_items WHERE id=?`, id)
+	result, err := s.db.ExecContext(ctx, `DELETE FROM backlog_items WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting item %q: %w", id, err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("deleting item %q: not found", id)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -24,9 +25,14 @@ func (r *Repo) Commit(ctx context.Context, message string) error {
 }
 
 // HasChanges checks if there are any staged or unstaged changes.
+// Uses a direct exec.Command for stdout capture since r.run() only captures stderr.
 func (r *Repo) HasChanges(ctx context.Context) (bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = r.workDir
+	cmd.Env = os.Environ()
+	if r.pat != "" {
+		cmd.Env = append(cmd.Env, "GIT_PAT="+r.pat, "GIT_TERMINAL_PROMPT=0")
+	}
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 

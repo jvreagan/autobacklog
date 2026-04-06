@@ -86,6 +86,7 @@ type mockAIClient struct {
 	runPrintOutputs []string
 	runPrintErrors  []error
 	budget         *claude.Budget
+	costPerCall    float64 // if >0, Record this amount per RunPrint call
 
 	runIdx      int
 	runPrintIdx int
@@ -116,6 +117,9 @@ func (m *mockAIClient) RunPrint(_ context.Context, _, _ string) (string, error) 
 	m.runPrintCalls++
 	idx := m.runPrintIdx
 	m.runPrintIdx++
+	if m.costPerCall > 0 {
+		m.budget.Record(m.costPerCall)
+	}
 	var out string
 	var err error
 	if idx < len(m.runPrintOutputs) {
@@ -1091,7 +1095,7 @@ func TestRunTestsWithRetry_OverrideCommand(t *testing.T) {
 	tr.results = []*runner.Result{{Passed: true, Output: "ok"}}
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	out, err := a.runTestsWithRetry(context.Background(), item)
+	out, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1112,7 +1116,7 @@ func TestRunTestsWithRetry_AutoDetect(t *testing.T) {
 	repo.workDir = t.TempDir()
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	out, err := a.runTestsWithRetry(context.Background(), item)
+	out, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1128,7 +1132,7 @@ func TestRunTestsWithRetry_NoFrameworkDetected(t *testing.T) {
 	a.repo.(*mockRepo).workDir = t.TempDir()
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	out, err := a.runTestsWithRetry(context.Background(), item)
+	out, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1143,7 +1147,7 @@ func TestRunTestsWithRetry_TestingDisabled(t *testing.T) {
 	a.cfg.Testing.OverrideCommand = ""
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	out, err := a.runTestsWithRetry(context.Background(), item)
+	out, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1160,7 +1164,7 @@ func TestRunTestsWithRetry_PassesFirst(t *testing.T) {
 	tr.results = []*runner.Result{{Passed: true, Output: "all pass"}}
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	out, err := a.runTestsWithRetry(context.Background(), item)
+	out, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1184,7 +1188,7 @@ func TestRunTestsWithRetry_PassesAfterRetry(t *testing.T) {
 	}
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	out, err := a.runTestsWithRetry(context.Background(), item)
+	out, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1208,7 +1212,7 @@ func TestRunTestsWithRetry_ExhaustsRetries(t *testing.T) {
 	}
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	_, err := a.runTestsWithRetry(context.Background(), item)
+	_, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}
@@ -1223,7 +1227,7 @@ func TestRunTestsWithRetry_RunnerError(t *testing.T) {
 	tr.results = []*runner.Result{nil}
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	_, err := a.runTestsWithRetry(context.Background(), item)
+	_, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err == nil {
 		t.Fatal("expected runner error")
 	}
@@ -1386,7 +1390,7 @@ func TestRunTestsWithRetry_NeverExceedsMaxRetries(t *testing.T) {
 	}
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	a.runTestsWithRetry(context.Background(), item)
+	a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 
 	// maxRetries=2 means 3 total runs (1 initial + 2 retries)
 	if tr.calls != 3 {
@@ -1522,7 +1526,7 @@ func TestRunTestsWithRetry_ClaudeFixError(t *testing.T) {
 	tr.results = []*runner.Result{{Passed: false, Output: "FAIL"}}
 
 	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
-	_, err := a.runTestsWithRetry(context.Background(), item)
+	_, err := a.runTestsWithRetry(context.Background(), item, &CycleStats{})
 	if err == nil {
 		t.Fatal("expected error from Claude fix failure")
 	}
@@ -2026,4 +2030,140 @@ func (p *prBodyCapture) CreatePR(ctx context.Context, workDir string, req gh.PRR
 
 func (p *prBodyCapture) EnableAutoMerge(ctx context.Context, workDir string, prURL string) error {
 	return p.inner.EnableAutoMerge(ctx, workDir, prURL)
+}
+
+// ---------------------------------------------------------------------------
+// inferFromLabels tests (#101)
+// ---------------------------------------------------------------------------
+
+func TestInferFromLabels(t *testing.T) {
+	tests := []struct {
+		name         string
+		labels       []string
+		wantPriority backlog.Priority
+		wantCategory backlog.Category
+	}{
+		{"no labels", nil, backlog.PriorityMedium, backlog.CategoryRefactor},
+		{"empty labels", []string{}, backlog.PriorityMedium, backlog.CategoryRefactor},
+		{"critical priority", []string{"critical"}, backlog.PriorityHigh, backlog.CategoryRefactor},
+		{"p0 priority", []string{"p0"}, backlog.PriorityHigh, backlog.CategoryRefactor},
+		{"p1 priority", []string{"p1"}, backlog.PriorityHigh, backlog.CategoryRefactor},
+		{"priority:high suffix", []string{"priority:high"}, backlog.PriorityHigh, backlog.CategoryRefactor},
+		{"high label", []string{"high"}, backlog.PriorityHigh, backlog.CategoryRefactor},
+		{"p3 low priority", []string{"p3"}, backlog.PriorityLow, backlog.CategoryRefactor},
+		{"p4 low priority", []string{"p4"}, backlog.PriorityLow, backlog.CategoryRefactor},
+		{"priority:low suffix", []string{"priority:low"}, backlog.PriorityLow, backlog.CategoryRefactor},
+		{"low label", []string{"low"}, backlog.PriorityLow, backlog.CategoryRefactor},
+		{"bug category", []string{"bug"}, backlog.PriorityMedium, backlog.CategoryBug},
+		{"bugfix category", []string{"bugfix"}, backlog.PriorityMedium, backlog.CategoryBug},
+		{"security category", []string{"security"}, backlog.PriorityMedium, backlog.CategorySecurity},
+		{"performance category", []string{"performance"}, backlog.PriorityMedium, backlog.CategoryPerformance},
+		{"perf category", []string{"perf"}, backlog.PriorityMedium, backlog.CategoryPerformance},
+		{"test category", []string{"test"}, backlog.PriorityMedium, backlog.CategoryTest},
+		{"testing category", []string{"testing"}, backlog.PriorityMedium, backlog.CategoryTest},
+		{"docs category", []string{"docs"}, backlog.PriorityMedium, backlog.CategoryDocs},
+		{"documentation category", []string{"documentation"}, backlog.PriorityMedium, backlog.CategoryDocs},
+		{"style category", []string{"style"}, backlog.PriorityMedium, backlog.CategoryStyle},
+		{"linting category", []string{"linting"}, backlog.PriorityMedium, backlog.CategoryStyle},
+		{"mixed priority and category", []string{"p1", "security"}, backlog.PriorityHigh, backlog.CategorySecurity},
+		{"case insensitive", []string{"HIGH", "BUG"}, backlog.PriorityHigh, backlog.CategoryBug},
+		{"unknown labels ignored", []string{"enhancement", "good-first-issue"}, backlog.PriorityMedium, backlog.CategoryRefactor},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotP, gotC := inferFromLabels(tt.labels)
+			if gotP != tt.wantPriority {
+				t.Errorf("priority = %q, want %q", gotP, tt.wantPriority)
+			}
+			if gotC != tt.wantCategory {
+				t.Errorf("category = %q, want %q", gotC, tt.wantCategory)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Budget exhaustion mid-implementation-loop test (#112)
+// ---------------------------------------------------------------------------
+
+func TestDoImplement_BudgetExhaustedMidLoop(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+	store := a.store
+
+	// Insert 3 pending items
+	for i := 0; i < 3; i++ {
+		item := backlog.NewItem(fmt.Sprintf("item-%d", i), "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+		item.RepoURL = a.cfg.Repo.URL
+		if err := store.Insert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Set budget so only the first item can be spent.
+	// costPerCall=5.0 means after 1st RunPrint, spent=5.0; CanSpend(5.0) = 5+5<=6 = false.
+	ai := a.claude.(*mockAIClient)
+	ai.budget = claude.NewBudget(6.0)
+	ai.costPerCall = 5.0
+	ai.runPrintOutputs = []string{"done"}
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: true, Output: "ok"}}
+
+	// Select all 3 items
+	pendingStatus := backlog.StatusPending
+	items, _ := store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
+	a.selectedItems = items
+
+	stats := &CycleStats{}
+	err := a.doImplement(ctx, stats)
+
+	// doImplement does not return an error — it logs and appends errors to stats
+	if err != nil {
+		t.Fatalf("doImplement returned error: %v", err)
+	}
+
+	// First item should succeed (or at least attempt), remaining items should fail with budget error
+	if len(stats.Errors) < 2 {
+		t.Errorf("expected at least 2 errors (budget exceeded), got %d", len(stats.Errors))
+	}
+
+	// Verify budget-exceeded errors
+	budgetErrors := 0
+	for _, e := range stats.Errors {
+		if strings.Contains(e.Error(), "budget exceeded") {
+			budgetErrors++
+		}
+	}
+	if budgetErrors < 2 {
+		t.Errorf("expected at least 2 budget exceeded errors, got %d", budgetErrors)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// recoverStuckItems test (#95)
+// ---------------------------------------------------------------------------
+
+func TestRecoverStuckItems(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	// Insert an in-progress item (simulating a crash)
+	item := backlog.NewItem("stuck item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusInProgress
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	a.recoverStuckItems(ctx)
+
+	// Verify item is now pending
+	got, err := a.store.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != backlog.StatusPending {
+		t.Errorf("status = %q, want %q", got.Status, backlog.StatusPending)
+	}
 }

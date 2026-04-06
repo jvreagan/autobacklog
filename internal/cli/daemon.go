@@ -28,6 +28,9 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	defer logging.Cleanup()
 	defer s.store.Close()
 	defer s.cancel()
+	if s.uiServer != nil {
+		defer s.uiServer.Shutdown(context.Background())
+	}
 
 	return runDaemonLoop(s.ctx, s.cfg, s.orchestrator, s.log)
 }
@@ -38,7 +41,7 @@ func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.Ap
 
 	for {
 		if isQuietHours(cfg.Daemon.QuietStart, cfg.Daemon.QuietEnd) {
-			log.Info("quiet hours, sleeping", "until", cfg.Daemon.QuietEnd)
+			log.Info("quiet hours active, rechecking in 10m", "quiet_end", cfg.Daemon.QuietEnd)
 			select {
 			case <-ctx.Done():
 				log.Info("daemon stopped")

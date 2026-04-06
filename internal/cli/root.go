@@ -12,6 +12,7 @@ var (
 	verbose    bool
 	dryRun     bool
 	helperMode string
+	webuiPort  int
 )
 
 // NewRootCmd creates the root command for autobacklog.
@@ -26,6 +27,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "run without making changes")
 	rootCmd.PersistentFlags().StringVar(&helperMode, "helper-mode", "", "override helper mode (buildbacklog or burndown)")
+	rootCmd.PersistentFlags().IntVar(&webuiPort, "webui-port", 0, "enable web UI on this port (0 = disabled)")
 
 	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(newDaemonCmd())

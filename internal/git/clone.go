@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -116,12 +117,17 @@ func (r *Repo) run(ctx context.Context, dir string, name string, args ...string)
 		argStr := strings.Join(args, " ")
 		errStr := stderr.String()
 		if r.pat != "" {
-			// Redact both raw and URL-encoded forms of the PAT
-			argStr = strings.ReplaceAll(argStr, r.pat, "[REDACTED]")
-			errStr = strings.ReplaceAll(errStr, r.pat, "[REDACTED]")
-			encoded := strings.ReplaceAll(r.pat, "/", "%2F")
-			argStr = strings.ReplaceAll(argStr, encoded, "[REDACTED]")
-			errStr = strings.ReplaceAll(errStr, encoded, "[REDACTED]")
+			// Redact raw, slash-encoded, and fully URL-encoded forms of the PAT
+			// to prevent credential leakage in error messages and logs.
+			redactAll := func(s string) string {
+				s = strings.ReplaceAll(s, r.pat, "[REDACTED]")
+				s = strings.ReplaceAll(s, strings.ReplaceAll(r.pat, "/", "%2F"), "[REDACTED]")
+				s = strings.ReplaceAll(s, url.PathEscape(r.pat), "[REDACTED]")
+				s = strings.ReplaceAll(s, url.QueryEscape(r.pat), "[REDACTED]")
+				return s
+			}
+			argStr = redactAll(argStr)
+			errStr = redactAll(errStr)
 		}
 		return fmt.Errorf("%s %s: %w\n%s", name, argStr, err, errStr)
 	}

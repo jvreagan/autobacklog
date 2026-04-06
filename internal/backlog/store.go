@@ -34,7 +34,8 @@ type Store interface {
 
 // ListFilter specifies criteria for listing backlog items.
 type ListFilter struct {
-	Status      *Status
+	Status      *Status   // single status filter (mutually exclusive with Statuses)
+	Statuses    []Status  // multiple status filter (OR); takes precedence over Status
 	Priority    *Priority
 	Category    *Category
 	RepoURL     *string

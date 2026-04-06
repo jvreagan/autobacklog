@@ -46,6 +46,40 @@ func Setup(cfg config.LoggingConfig) (*slog.Logger, error) {
 	return logger, nil
 }
 
+// SetupWithExtraWriter is identical to Setup but also writes log output to
+// the provided extra writer. The logging package never imports webui — it
+// just accepts a plain io.Writer.
+func SetupWithExtraWriter(cfg config.LoggingConfig, extra io.Writer) (*slog.Logger, error) {
+	level := parseLevel(cfg.Level)
+
+	var writer io.Writer = io.MultiWriter(os.Stderr, extra)
+	var cleanup func()
+	if cfg.File != "" {
+		f, err := os.OpenFile(cfg.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
+			return nil, err
+		}
+		writer = io.MultiWriter(os.Stderr, f, extra)
+		cleanup = func() { f.Close() }
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+
+	var handler slog.Handler
+	if strings.ToLower(cfg.Format) == "json" {
+		handler = slog.NewJSONHandler(writer, opts)
+	} else {
+		handler = slog.NewTextHandler(writer, opts)
+	}
+
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
+	logCleanup = cleanup
+
+	return logger, nil
+}
+
 // logCleanup holds the function to close the log file, if any.
 var logCleanup func()
 

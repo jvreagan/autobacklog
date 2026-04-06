@@ -55,13 +55,16 @@ func (r *Repo) CheckoutBranch(ctx context.Context, branch string) error {
 	return r.run(ctx, r.workDir, "git", "checkout", branch)
 }
 
-// Push pushes a branch to origin.
+// Push pushes a branch to origin. Uses runGit so the credential helper is
+// available for HTTPS authentication.
 func (r *Repo) Push(ctx context.Context, branch string) error {
 	r.log.Info("pushing branch", "name", branch)
-	return r.run(ctx, r.workDir, "git", "push", "origin", branch)
+	return r.runGit(ctx, r.workDir, "push", "origin", branch)
 }
 
-// DeleteBranch deletes a local branch.
+// DeleteBranch deletes a local branch. Called after successful PR creation and
+// in failure paths (test failure, no changes, Claude error) to prevent branch
+// accumulation in long-running daemon mode.
 func (r *Repo) DeleteBranch(ctx context.Context, branch string) error {
 	return r.run(ctx, r.workDir, "git", "branch", "-D", branch)
 }

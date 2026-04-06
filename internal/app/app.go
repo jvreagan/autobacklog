@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"io"
+
 	"github.com/jamesreagan/autobacklog/internal/backlog"
 	"github.com/jamesreagan/autobacklog/internal/claude"
 	"github.com/jamesreagan/autobacklog/internal/config"
@@ -108,10 +110,25 @@ func NewWithDeps(
 	}
 }
 
+// SetClaudeOutputWriters overrides the stdout/stderr sinks on the underlying
+// Claude client so output can be teed to the web UI.
+func (a *App) SetClaudeOutputWriters(stdout, stderr io.Writer) {
+	if c, ok := a.claude.(*claude.Client); ok {
+		c.SetOutputWriters(stdout, stderr)
+	}
+}
+
 // RunCycle executes one full cycle of the state machine.
 func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	stats := &CycleStats{}
 	state := StateClone
+
+	// Reset cached test detection at the start of each cycle so framework
+	// changes in the target repo are picked up across daemon cycles.
+	a.cachedDetect = nil
+
+	// Recover items stuck in StatusInProgress from a previous crash.
+	a.recoverStuckItems(ctx)
 
 	a.log.Info("starting cycle", "dry_run", a.dryRun, "helper_mode", a.cfg.HelperMode, "repo", a.cfg.Repo.URL)
 
@@ -243,6 +260,24 @@ func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
 	a.burndownTotal = 0
 	a.burndownDone = 0
 	return &cumulative, nil
+}
+
+// recoverStuckItems resets any in-progress items back to pending so they can
+// be retried. Items get stuck when the process crashes mid-implementation.
+func (a *App) recoverStuckItems(ctx context.Context) {
+	inProgress := backlog.StatusInProgress
+	stuck, err := a.store.List(ctx, backlog.ListFilter{Status: &inProgress, RepoURL: &a.cfg.Repo.URL})
+	if err != nil {
+		a.log.Warn("failed to check for stuck items", "error", err)
+		return
+	}
+	for _, item := range stuck {
+		a.log.Warn("recovering stuck in-progress item", "title", item.Title, "id", item.ID)
+		item.Status = backlog.StatusPending
+		if err := a.store.Update(ctx, item); err != nil {
+			a.log.Error("failed to recover stuck item", "title", item.Title, "error", err)
+		}
+	}
 }
 
 func (a *App) doClone(ctx context.Context) error {
@@ -398,7 +433,7 @@ func (a *App) doIngest(ctx context.Context, stats *CycleStats) error {
 	a.reviewItems = nil
 
 	// Create GitHub issues for new items when configured
-	if a.cfg.GitHub.CreateIssues && !a.dryRun && inserted > 0 {
+	if a.cfg.GitHub.CreateIssues && inserted > 0 {
 		a.createIssuesForNewItems(ctx, stats)
 	}
 
@@ -582,6 +617,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
 			a.log.Error("failed to checkout main branch after implement error", "branch", a.cfg.Repo.Branch, "error", coErr)
 		}
+		if delErr := a.repo.DeleteBranch(ctx, branchName); delErr != nil {
+			a.log.Warn("failed to delete feature branch after implement error", "branch", branchName, "error", delErr)
+		}
 		return fmt.Errorf("claude implement: %w", err)
 	}
 
@@ -595,6 +633,9 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		a.log.Warn("claude made no changes", "title", item.Title)
 		if err := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); err != nil {
 			return fmt.Errorf("checkout main branch after no changes: %w", err)
+		}
+		if delErr := a.repo.DeleteBranch(ctx, branchName); delErr != nil {
+			a.log.Warn("failed to delete feature branch after no changes", "branch", branchName, "error", delErr)
 		}
 		item.Status = backlog.StatusSkipped
 		if err := a.store.Update(ctx, item); err != nil {
@@ -610,13 +651,16 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 
 	// Run tests with retry loop
 	a.log.Info("running tests", "max_retries", a.cfg.Testing.MaxRetries)
-	testResult, err := a.runTestsWithRetry(ctx, item)
+	testResult, err := a.runTestsWithRetry(ctx, item, stats)
 	if err != nil {
 		if revertErr := a.repo.RevertToClean(ctx); revertErr != nil {
 			a.log.Error("failed to revert working directory", "error", revertErr)
 		}
 		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
 			a.log.Error("failed to checkout main branch after test failure", "branch", a.cfg.Repo.Branch, "error", coErr)
+		}
+		if delErr := a.repo.DeleteBranch(ctx, branchName); delErr != nil {
+			a.log.Warn("failed to delete feature branch after test failure", "branch", branchName, "error", delErr)
 		}
 		item.Status = backlog.StatusFailed
 		if updateErr := a.store.Update(ctx, item); updateErr != nil {
@@ -702,7 +746,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	return nil
 }
 
-func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item) (string, error) {
+func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item, stats *CycleStats) (string, error) {
 	workDir := a.repo.WorkDir()
 	maxRetries := a.cfg.Testing.MaxRetries
 
@@ -747,6 +791,7 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item) (string
 		}
 
 		lastOutput = result.Output
+		stats.TestFailures++
 		if attempt <= maxRetries {
 			a.log.Warn("tests failed, invoking Claude to fix", "attempt", attempt, "max_retries", maxRetries)
 

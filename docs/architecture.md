@@ -28,14 +28,16 @@ CLONE → IMPORT_ISSUES → REVIEW → INGEST → EVALUATE_THRESHOLD → IMPLEME
 - In **burndown mode**, thresholds are bypassed — all pending items are selected (up to `max_per_cycle`)
 
 **IMPLEMENT** — For each selected item:
-1. Creates a feature branch (`autobacklog/<category>/<title-slug>`)
-2. Invokes Claude to implement the fix
-3. Runs tests with retry loop (auto-detect or override command)
-4. On test failure, asks Claude to fix (up to `max_retries` attempts); if still failing, reverts and marks failed
-5. Stages, commits, pushes
-6. Creates a PR via `gh pr create` (includes `Fixes #N` when the item has a linked issue)
-7. Optionally enables auto-merge via `gh pr merge --squash --auto`
-8. Updates item status and PR link
+1. Checks budget — skips remaining items if total spend would exceed limits
+2. Creates a feature branch (`autobacklog/<category>/<title-slug>`)
+3. Invokes Claude to implement the fix
+4. Runs tests with retry loop (auto-detect or override command)
+5. On test failure, asks Claude to fix (up to `max_retries` attempts); if still failing, reverts and marks failed
+6. Stages, commits, pushes
+7. Creates a PR via `gh pr create` (includes `Fixes #N` when the item has a linked issue)
+8. Optionally enables auto-merge via `gh pr merge --squash --auto`
+9. Updates item status and PR link
+10. Cleans up feature branch on both success (after PR) and failure (claude error, no changes, test failure)
 
 > **Note:** The `TEST` and `PR` states exist in the state enum but are **skipped** during the main loop — testing and PR creation are integrated into the `IMPLEMENT` phase's `implementItem()` method.
 
@@ -54,7 +56,8 @@ internal/
 ├── notify/       Notifier interface, SMTP email implementation
 ├── runner/       Test framework detection, test execution
 ├── cli/          Cobra commands (run, daemon, status, init, version)
-└── logging/      Structured logging setup (slog)
+├── logging/      Structured logging setup (slog)
+└── webui/        Optional real-time web dashboard (SSE, embedded HTML)
 ```
 
 ## Key Design Decisions
@@ -72,7 +75,7 @@ The `app` package defines interfaces for its external dependencies, following th
 The production constructor `New()` builds concrete implementations and delegates to `NewWithDeps()`, which accepts these interfaces. This enables comprehensive testing of the orchestrator with mock dependencies.
 
 ### CGo-free SQLite
-Uses `modernc.org/sqlite` (pure Go) instead of `github.com/mattn/go-sqlite3` to avoid CGo dependency, making cross-compilation simpler.
+Uses `modernc.org/sqlite` (pure Go) instead of `github.com/mattn/go-sqlite3` to avoid CGo dependency, making cross-compilation simpler. The connection pool is limited to 1 open connection (`SetMaxOpenConns(1)`) to prevent SQLITE_BUSY errors from concurrent writers.
 
 ### Claude Code CLI as Subprocess
 Rather than using the API directly, we invoke the `claude` CLI as a subprocess. This leverages Claude Code's built-in capabilities (file editing, context management) and respects per-invocation budget caps. CLI output is streamed to the terminal in real time so the user can follow progress — implementation calls stream both stdout and stderr, while review calls stream stderr only since stdout contains structured JSON.
@@ -89,4 +92,7 @@ All changes go through pull requests. The daemon never pushes to the main branch
 All backlog items are tagged with their `repo_url`. Every query — listing, deduplication, threshold evaluation, and stale cleanup — is scoped to the current repo. This means multiple repos can safely share a single SQLite database without cross-contamination.
 
 ### Deduplication
-Items are deduplicated by comparing title similarity + file path against non-terminal items in the backlog for the same repo. This prevents the same issue from being filed repeatedly across cycles while allowing identical findings in different repos to coexist.
+Items are deduplicated by comparing title similarity + file path against active items (pending and in-progress) in the backlog for the same repo. Terminal items (done, failed, skipped) are excluded from dedup checks so that previously resolved findings can be re-filed if they recur.
+
+### Crash Recovery
+At the start of each cycle, any items stuck in `in_progress` status (from a previous crash or kill) are automatically recovered by resetting them to `pending`.

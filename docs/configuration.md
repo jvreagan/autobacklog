@@ -35,9 +35,9 @@ When a PR is created for an item that has a linked issue, the PR body includes `
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `binary` | string | `claude` | Path to Claude Code CLI |
+| `binary` | string | `claude` | Claude Code CLI command name (must be a bare command, not an absolute path) |
 | `model` | string | `sonnet` | Model to use |
-| `max_budget_per_call` | float | `10.00` | USD cap per CLI invocation |
+| `max_budget_per_call` | float | `10.00` | USD cap per CLI invocation (must not exceed `max_budget_total`) |
 | `max_budget_total` | float | `100.00` | USD cap across all invocations |
 | `timeout` | duration | `10m` | Timeout per invocation |
 | `dangerously_skip_permissions` | bool | `false` | Pass `--dangerously-skip-permissions` to Claude CLI |
@@ -88,8 +88,8 @@ Can also be set via `--helper-mode` CLI flag.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `interval` | duration | `1h` | Time between cycles |
-| `quiet_start` | string | | Start of quiet hours (`HH:MM`) |
-| `quiet_end` | string | | End of quiet hours (`HH:MM`) |
+| `quiet_start` | string | | Start of quiet hours (`HH:MM`); supports midnight-spanning ranges (e.g., `22:00`–`06:00`) |
+| `quiet_end` | string | | End of quiet hours (`HH:MM`); daemon rechecks every 10 minutes during quiet hours |
 
 ## `notifications`
 
@@ -128,6 +128,26 @@ List of email addresses.
 | `level` | string | `info` | Log level: debug, info, warn, error |
 | `file` | string | | Log file path (also logs to stderr) |
 | `format` | string | `text` | Output format: text or json |
+
+## `webui`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `port` | int | `0` | HTTP port for the real-time web status UI; `0` = disabled |
+
+When enabled (port > 0), autobacklog starts an HTTP server that serves a single-page dashboard at `http://localhost:<port>`. The UI shows:
+
+- **Configuration overview** — sanitized config values (secrets redacted)
+- **App Logs pane** — real-time slog output, color-coded by level
+- **Claude Output pane** — real-time Claude CLI stdout stream
+
+The server uses Server-Sent Events (SSE) for streaming. Endpoints:
+
+- `GET /` — dashboard HTML
+- `GET /api/events` — SSE stream (optional `?type=log|claude` filter)
+- `GET /api/config` — sanitized config as JSON
+
+Can also be enabled via `--webui-port` CLI flag, which overrides the config value.
 
 ## Duration Format
 

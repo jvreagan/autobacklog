@@ -15,6 +15,7 @@ import (
 	gh "github.com/jamesreagan/autobacklog/internal/github"
 	"github.com/jamesreagan/autobacklog/internal/logging"
 	"github.com/jamesreagan/autobacklog/internal/notify"
+	"github.com/jamesreagan/autobacklog/internal/webui"
 )
 
 // setupResult bundles the objects created during CLI setup.
@@ -25,6 +26,8 @@ type setupResult struct {
 	log          *slog.Logger
 	ctx          context.Context
 	cancel       context.CancelFunc
+	hub          *webui.Hub
+	uiServer     *webui.Server
 }
 
 // setup loads config, opens the DB, sets up auth, and creates the orchestrator.
@@ -42,8 +45,37 @@ func setup() (*setupResult, error) {
 		cfg.HelperMode = helperMode
 	}
 
-	log, err := logging.Setup(cfg.Logging)
+	// CLI flag overrides config for webui port
+	if webuiPort != 0 {
+		cfg.WebUI.Port = webuiPort
+	}
+
+	// Start web UI server before logging so port conflicts fail fast.
+	var hub *webui.Hub
+	var uiServer *webui.Server
+	if cfg.WebUI.Port > 0 {
+		hub = webui.NewHub(1000)
+		bootLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		uiServer = webui.NewServer(cfg.WebUI.Port, hub, func() any {
+			return sanitizeConfig(cfg)
+		}, bootLog)
+		if err := uiServer.Start(); err != nil {
+			return nil, err
+		}
+	}
+
+	// Set up logging, optionally teeing to the web UI hub.
+	var log *slog.Logger
+	if hub != nil {
+		logWriter := webui.NewTeeWriter(os.Stderr, hub, webui.EventLog)
+		log, err = logging.SetupWithExtraWriter(cfg.Logging, logWriter)
+	} else {
+		log, err = logging.Setup(cfg.Logging)
+	}
 	if err != nil {
+		if uiServer != nil {
+			uiServer.Shutdown(context.Background())
+		}
 		return nil, fmt.Errorf("setting up logging: %w", err)
 	}
 
@@ -99,6 +131,12 @@ func setup() (*setupResult, error) {
 		return nil, fmt.Errorf("creating orchestrator: %w", err)
 	}
 
+	// Tee Claude CLI output to the web UI hub if enabled.
+	if hub != nil {
+		claudeTee := webui.NewTeeWriter(os.Stdout, hub, webui.EventClaude)
+		orchestrator.SetClaudeOutputWriters(claudeTee, os.Stderr)
+	}
+
 	return &setupResult{
 		cfg:          cfg,
 		store:        store,
@@ -106,5 +144,63 @@ func setup() (*setupResult, error) {
 		log:          log,
 		ctx:          ctx,
 		cancel:       cancel,
+		hub:          hub,
+		uiServer:     uiServer,
 	}, nil
+}
+
+// sanitizeConfig returns a copy of the config with secrets redacted.
+func sanitizeConfig(cfg *config.Config) map[string]any {
+	redact := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return "***"
+	}
+	return map[string]any{
+		"repo": map[string]any{
+			"url":              cfg.Repo.URL,
+			"branch":           cfg.Repo.Branch,
+			"work_dir":         cfg.Repo.WorkDir,
+			"pr_branch_prefix": cfg.Repo.PRBranchPrefix,
+		},
+		"github": map[string]any{
+			"auto_merge":    cfg.GitHub.AutoMerge,
+			"create_issues": cfg.GitHub.CreateIssues,
+			"issue_label":   cfg.GitHub.IssueLabel,
+		},
+		"claude": map[string]any{
+			"model":              cfg.Claude.Model,
+			"max_budget_per_call": cfg.Claude.MaxBudgetPerCall,
+			"max_budget_total":    cfg.Claude.MaxBudgetTotal,
+			"timeout":            cfg.Claude.Timeout.String(),
+		},
+		"backlog": map[string]any{
+			"high_threshold":   cfg.Backlog.HighThreshold,
+			"medium_threshold": cfg.Backlog.MediumThreshold,
+			"low_threshold":    cfg.Backlog.LowThreshold,
+			"max_per_cycle":    cfg.Backlog.MaxPerCycle,
+			"stale_days":       cfg.Backlog.StaleDays,
+		},
+		"mode":        cfg.Mode,
+		"helper_mode": cfg.HelperMode,
+		"notifications": map[string]any{
+			"enabled": cfg.Notifications.Enabled,
+			"smtp": map[string]any{
+				"host":     cfg.Notifications.SMTP.Host,
+				"port":     cfg.Notifications.SMTP.Port,
+				"username": redact(cfg.Notifications.SMTP.Username),
+				"password": redact(cfg.Notifications.SMTP.Password),
+				"from":     cfg.Notifications.SMTP.From,
+			},
+		},
+		"logging": map[string]any{
+			"level":  cfg.Logging.Level,
+			"file":   cfg.Logging.File,
+			"format": cfg.Logging.Format,
+		},
+		"webui": map[string]any{
+			"port": cfg.WebUI.Port,
+		},
+	}
 }

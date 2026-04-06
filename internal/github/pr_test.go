@@ -62,3 +62,17 @@ func TestFormatPRBody_WithoutIssueNumber(t *testing.T) {
 		t.Error("body should not contain 'Fixes #' when issue number is 0")
 	}
 }
+
+func TestFormatPRBody_BacktickEscaping(t *testing.T) {
+	testOutput := "output\n```\ncode block\n```\nmore output"
+	body := FormatPRBody("Fix", "desc", "bug", testOutput, 0)
+
+	// Triple backticks inside test results should be escaped to prevent
+	// breaking the outer code fence.
+	if strings.Contains(body, "```\ncode block\n```") {
+		t.Error("backtick sequences in test output should be escaped")
+	}
+	if !strings.Contains(body, "` ` `") {
+		t.Error("expected escaped backticks in body")
+	}
+}

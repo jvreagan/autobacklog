@@ -20,21 +20,21 @@ func NewManager(store Store, log *slog.Logger) *Manager {
 // Ingest takes a slice of new items, deduplicates against existing items for the given repo, and inserts new ones.
 // Returns the number of new items inserted.
 func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) (int, error) {
-	existing, err := m.store.List(ctx, ListFilter{RepoURL: &repoURL})
+	// Only fetch active (non-terminal) items for deduplication — avoids a full
+	// table scan of done/failed/skipped items in long-running daemons.
+	active, err := m.store.List(ctx, ListFilter{
+		RepoURL:  &repoURL,
+		Statuses: []Status{StatusPending, StatusInProgress},
+	})
 	if err != nil {
 		return 0, err
 	}
 
 	// Build a lookup map keyed on normalized "title|filepath" for O(1) dedup.
 	type dedupKey struct{ title, file string }
-	seen := make(map[dedupKey]bool, len(existing))
-	var active []*Item
-	for _, ex := range existing {
-		if ex.Status == StatusDone || ex.Status == StatusSkipped || ex.Status == StatusFailed {
-			continue
-		}
+	seen := make(map[dedupKey]bool, len(active))
+	for _, ex := range active {
 		seen[dedupKey{strings.ToLower(strings.TrimSpace(ex.Title)), ex.FilePath}] = true
-		active = append(active, ex)
 	}
 
 	inserted := 0
@@ -82,24 +82,6 @@ func (m *Manager) isFuzzyDuplicate(newItem *Item, existing []*Item) bool {
 			continue
 		}
 		if strings.Contains(newTitle, exTitle) || strings.Contains(exTitle, newTitle) {
-			return true
-		}
-	}
-	return false
-}
-
-// similarText checks if two strings are similar enough to be considered duplicates.
-// Uses exact normalized equality only — substring matching is handled separately
-// with a minimum length requirement to avoid false positives.
-func similarText(a, b string) bool {
-	a = strings.ToLower(strings.TrimSpace(a))
-	b = strings.ToLower(strings.TrimSpace(b))
-	if a == b {
-		return true
-	}
-	// Substring containment only for titles of meaningful length
-	if len(a) >= 20 && len(b) >= 20 {
-		if strings.Contains(a, b) || strings.Contains(b, a) {
 			return true
 		}
 	}

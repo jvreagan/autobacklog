@@ -143,6 +143,51 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid webui port 0",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				WebUI:   WebUIConfig{Port: 0},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid webui port 8080",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				WebUI:   WebUIConfig{Port: 8080},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid webui port 65535",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				WebUI:   WebUIConfig{Port: 65535},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid webui port negative",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				WebUI:   WebUIConfig{Port: -1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid webui port too high",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				WebUI:   WebUIConfig{Port: 65536},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

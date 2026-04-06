@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autobacklog — Status</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  background: #0d1117;
+  color: #c9d1d9;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+}
+header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
+#status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+#status.connected { background: #0d4429; color: #3fb950; }
+#status.disconnected { background: #4a1e1e; color: #f85149; }
+
+/* Config section */
+#config-section {
+  padding: 12px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  max-height: 25vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+#config-section h2 {
+  font-size: 12px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+#config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 6px;
+}
+.config-item {
+  font-size: 12px;
+  padding: 4px 8px;
+  background: #0d1117;
+  border-radius: 4px;
+  border: 1px solid #21262d;
+}
+.config-item .key { color: #8b949e; }
+.config-item .val { color: #c9d1d9; margin-left: 4px; }
+
+/* Panes */
+#panes {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.pane:first-child { border-right: 1px solid #30363d; }
+.pane-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8b949e;
+  padding: 6px 12px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+.pane-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  min-height: 0;
+}
+
+/* Log line colors */
+.line { white-space: pre-wrap; word-break: break-all; }
+.line-debug { color: #6e7681; }
+.line-info  { color: #c9d1d9; }
+.line-warn  { color: #d29922; }
+.line-error { color: #f85149; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>autobacklog</h1>
+  <span id="status" class="disconnected">disconnected</span>
+</header>
+
+<div id="config-section">
+  <h2>Configuration</h2>
+  <div id="config-grid"><span class="config-item"><span class="key">loading...</span></span></div>
+</div>
+
+<div id="panes">
+  <div class="pane">
+    <div class="pane-header">App Logs</div>
+    <div class="pane-body" id="log-pane"></div>
+  </div>
+  <div class="pane">
+    <div class="pane-header">Claude Output</div>
+    <div class="pane-body" id="claude-pane"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const MAX_LINES = 5000;
+  const logPane = document.getElementById('log-pane');
+  const claudePane = document.getElementById('claude-pane');
+  const statusEl = document.getElementById('status');
+  const configGrid = document.getElementById('config-grid');
+
+  function classifyLevel(text) {
+    const t = text.toLowerCase();
+    if (t.includes('level=debug') || t.includes('"level":"debug"')) return 'debug';
+    if (t.includes('level=warn')  || t.includes('"level":"warn"'))  return 'warn';
+    if (t.includes('level=error') || t.includes('"level":"error"')) return 'error';
+    return 'info';
+  }
+
+  function isAtBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }
+
+  function appendLine(pane, text, levelClass) {
+    const atBottom = isAtBottom(pane);
+    const div = document.createElement('div');
+    div.className = 'line ' + (levelClass ? 'line-' + levelClass : '');
+    div.textContent = text;
+    pane.appendChild(div);
+
+    while (pane.children.length > MAX_LINES) {
+      pane.removeChild(pane.firstChild);
+    }
+
+    if (atBottom) {
+      pane.scrollTop = pane.scrollHeight;
+    }
+  }
+
+  // Load config
+  fetch('/api/config')
+    .then(r => r.json())
+    .then(cfg => {
+      configGrid.innerHTML = '';
+      const flat = flatten(cfg);
+      for (const [k, v] of Object.entries(flat)) {
+        const item = document.createElement('div');
+        item.className = 'config-item';
+        item.innerHTML = '<span class="key">' + esc(k) + ':</span><span class="val">' + esc(String(v)) + '</span>';
+        configGrid.appendChild(item);
+      }
+    })
+    .catch(() => {
+      configGrid.innerHTML = '<span class="config-item"><span class="key">failed to load</span></span>';
+    });
+
+  function flatten(obj, prefix) {
+    const result = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? prefix + '.' + k : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        Object.assign(result, flatten(v, key));
+      } else {
+        result[key] = v;
+      }
+    }
+    return result;
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  // SSE connection with auto-reconnect
+  let reconnectDelay = 1000;
+
+  function connect() {
+    const es = new EventSource('/api/events');
+
+    es.onopen = function() {
+      statusEl.textContent = 'connected';
+      statusEl.className = 'connected';
+      reconnectDelay = 1000;
+    };
+
+    es.addEventListener('log', function(e) {
+      appendLine(logPane, e.data, classifyLevel(e.data));
+    });
+
+    es.addEventListener('claude', function(e) {
+      appendLine(claudePane, e.data, null);
+    });
+
+    es.onerror = function() {
+      statusEl.textContent = 'disconnected';
+      statusEl.className = 'disconnected';
+      es.close();
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+    };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

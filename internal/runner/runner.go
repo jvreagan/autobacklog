@@ -85,12 +85,18 @@ func (lb *limitedBuffer) Write(p []byte) (int, error) {
 	if remaining <= 0 {
 		return len(p), nil
 	}
+	originalLen := len(p)
 	if len(p) > remaining {
 		p = p[:remaining]
 	}
 	n, err := lb.buf.Write(p)
 	lb.written += n
-	return n, err
+	if err != nil {
+		return n, err
+	}
+	// Return the original length to satisfy the io.Writer contract:
+	// n == len(p) when err == nil. Excess bytes are intentionally discarded.
+	return originalLen, nil
 }
 
 func (lb *limitedBuffer) String() string {
