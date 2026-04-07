@@ -12,6 +12,10 @@ const docsDirective = `Before starting, read all files in the docs/ directory (i
 
 `
 
+// maxPromptTestOutput caps test output embedded in prompts to avoid wasting
+// tokens on massive test logs (#152).
+const maxPromptTestOutput = 10000
+
 // ReviewPrompt generates a prompt for Claude to review a codebase.
 func ReviewPrompt() string {
 	return docsDirective + `Review this entire codebase for improvements. For each finding, output a JSON array of objects with these fields:
@@ -45,14 +49,17 @@ Output ONLY the JSON array, no other text. Example:
 }
 
 // ImplementPrompt generates a prompt for Claude to implement a fix for a backlog item.
+// User-supplied fields are clearly delimited to reduce prompt injection risk (#121).
 func ImplementPrompt(item *backlog.Item) string {
 	return docsDirective + fmt.Sprintf(`Implement the following improvement:
 
+<backlog-item>
 Title: %s
 Description: %s
 File: %s
 Category: %s
 Priority: %s
+</backlog-item>
 
 Make the necessary code changes to fix this issue. Follow existing code conventions and style.
 If new tests are needed, add them. If existing tests need updating, update them.
@@ -60,17 +67,27 @@ Make minimal, focused changes — don't refactor unrelated code.`, item.Title, i
 }
 
 // FixTestPrompt generates a prompt for Claude to fix failing tests.
+// Truncates test output to maxPromptTestOutput to control token usage (#152).
 func FixTestPrompt(testOutput string) string {
+	if len(testOutput) > maxPromptTestOutput {
+		testOutput = "... (truncated) ...\n" + testOutput[len(testOutput)-maxPromptTestOutput:]
+	}
 	return fmt.Sprintf(`The tests are failing after the recent changes. Here is the test output:
 
+<test-output>
 %s
+</test-output>
 
 Fix the code so that all tests pass. Make minimal changes — only fix what's broken.
 Do not disable or skip tests.`, testOutput)
 }
 
 // DocumentPrompt generates a prompt for Claude to update documentation.
+// Returns empty string if changes slice is empty (#202).
 func DocumentPrompt(changes []string) string {
+	if len(changes) == 0 {
+		return ""
+	}
 	changeList := strings.Join(changes, "\n- ")
 	return docsDirective + fmt.Sprintf(`The following changes were made to the codebase:
 - %s

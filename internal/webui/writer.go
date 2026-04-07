@@ -27,8 +27,11 @@ func NewTeeWriter(w io.Writer, hub *Hub, eventType EventType) *TeeWriter {
 func (tw *TeeWriter) Write(p []byte) (int, error) {
 	n, err := tw.underlying.Write(p)
 
+	// #157: only broadcast the bytes actually written
+	broadcast := p[:n]
+
 	// Broadcast each non-empty line
-	lines := bytes.Split(p, []byte("\n"))
+	lines := bytes.Split(broadcast, []byte("\n"))
 	for _, line := range lines {
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 {

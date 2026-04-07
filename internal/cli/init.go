@@ -89,11 +89,19 @@ webui:
 
 func runInit(cmd *cobra.Command, args []string) error {
 	filename := "autobacklog.yaml"
-	if _, err := os.Stat(filename); err == nil {
-		return fmt.Errorf("%s already exists; remove it first or edit it directly", filename)
+	// #215: atomic check-and-create to avoid TOCTOU race
+	f, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("%s already exists; remove it first or edit it directly", filename)
+		}
+		return fmt.Errorf("creating config: %w", err)
 	}
-
-	if err := os.WriteFile(filename, []byte(exampleConfig), 0600); err != nil {
+	if _, err := f.WriteString(exampleConfig); err != nil {
+		f.Close()
+		return fmt.Errorf("writing config: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 

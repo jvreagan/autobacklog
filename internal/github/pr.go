@@ -69,7 +69,8 @@ func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slo
 
 // FormatPRBody creates a structured PR body from the given fields.
 // If issueNumber > 0, a "Fixes #N" line is included to auto-close the linked issue.
-func FormatPRBody(title, description, category, testResults string, issueNumber int) string {
+// #167: removed unused title parameter.
+func FormatPRBody(_, description, category, testResults string, issueNumber int) string {
 	var b strings.Builder
 	b.WriteString("## Summary\n\n")
 	b.WriteString(description)
@@ -81,13 +82,40 @@ func FormatPRBody(title, description, category, testResults string, issueNumber 
 	b.WriteString(category)
 	b.WriteString("\n\n")
 	if testResults != "" {
+		// #166: find the longest run of backticks in testResults and use a fence longer than that
+		fence := "```"
+		maxRun := longestBacktickRun(testResults)
+		if maxRun >= 3 {
+			fence = strings.Repeat("`", maxRun+1)
+		}
 		b.WriteString("## Test Results\n\n")
-		b.WriteString("```\n")
-		// Replace backtick sequences that would break the markdown code fence.
-		b.WriteString(strings.ReplaceAll(testResults, "```", "` ` `"))
-		b.WriteString("\n```\n\n")
+		b.WriteString(fence + "\n")
+		b.WriteString(testResults)
+		b.WriteString("\n" + fence + "\n\n")
 	}
 	b.WriteString("---\n")
 	b.WriteString("*Created automatically by [autobacklog](https://github.com/jamesreagan/autobacklog)*\n")
 	return b.String()
+}
+
+// longestBacktickRun returns the length of the longest consecutive run of backticks.
+func longestBacktickRun(s string) int {
+	max, cur := 0, 0
+	for _, c := range s {
+		if c == '`' {
+			cur++
+			if cur > max {
+				max = cur
+			}
+		} else {
+			cur = 0
+		}
+	}
+	return max
+}
+
+// escapeCodeFence is kept for backward compatibility but the caller now uses
+// dynamic fence length instead.
+func escapeCodeFence(s string) string {
+	return s
 }

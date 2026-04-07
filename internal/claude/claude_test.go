@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"strings"
@@ -148,5 +149,93 @@ func TestClient_RunPrint_BudgetExceeded(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "budget exceeded") {
 		t.Errorf("error should mention budget, got: %v", err)
+	}
+}
+
+// #198: LimitedWriter boundary condition tests.
+func TestLimitedWriter_UnderLimit(t *testing.T) {
+	var buf bytes.Buffer
+	lw := &LimitedWriter{W: &buf, Limit: 100}
+
+	data := []byte("hello")
+	n, err := lw.Write(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 5 {
+		t.Errorf("Write returned %d, want 5", n)
+	}
+	if buf.String() != "hello" {
+		t.Errorf("buf = %q, want %q", buf.String(), "hello")
+	}
+	if lw.Written != 5 {
+		t.Errorf("Written = %d, want 5", lw.Written)
+	}
+}
+
+func TestLimitedWriter_ExactlyAtLimit(t *testing.T) {
+	var buf bytes.Buffer
+	lw := &LimitedWriter{W: &buf, Limit: 5}
+
+	n, err := lw.Write([]byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 5 {
+		t.Errorf("Write returned %d, want 5", n)
+	}
+	if buf.String() != "hello" {
+		t.Errorf("buf = %q, want %q", buf.String(), "hello")
+	}
+}
+
+func TestLimitedWriter_OverLimit(t *testing.T) {
+	var buf bytes.Buffer
+	lw := &LimitedWriter{W: &buf, Limit: 3}
+
+	n, err := lw.Write([]byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should report len(p) = 5 to satisfy io.Writer contract
+	if n != 5 {
+		t.Errorf("Write returned %d, want 5", n)
+	}
+	// But only 3 bytes should be written to underlying writer
+	if buf.String() != "hel" {
+		t.Errorf("buf = %q, want %q", buf.String(), "hel")
+	}
+}
+
+func TestLimitedWriter_AlreadyExhausted(t *testing.T) {
+	var buf bytes.Buffer
+	lw := &LimitedWriter{W: &buf, Limit: 5, Written: 5}
+
+	n, err := lw.Write([]byte("more"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Discards silently, returns len(p)
+	if n != 4 {
+		t.Errorf("Write returned %d, want 4", n)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("buf should be empty, got %q", buf.String())
+	}
+}
+
+func TestLimitedWriter_MultipleWrites(t *testing.T) {
+	var buf bytes.Buffer
+	lw := &LimitedWriter{W: &buf, Limit: 10}
+
+	lw.Write([]byte("aaa"))   // 3 written
+	lw.Write([]byte("bbbbb")) // 5 more = 8 total
+	lw.Write([]byte("ccccc")) // only 2 fit, rest discarded
+
+	if buf.String() != "aaabbbbbcc" {
+		t.Errorf("buf = %q, want %q", buf.String(), "aaabbbbbcc")
+	}
+	if lw.Written != 10 {
+		t.Errorf("Written = %d, want 10", lw.Written)
 	}
 }

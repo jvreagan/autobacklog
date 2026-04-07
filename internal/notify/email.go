@@ -45,7 +45,9 @@ func (e *EmailNotifier) Send(n Notification) error {
 	}
 
 	to := e.cfg.Recipients
-	subject := fmt.Sprintf("[autobacklog] %s", n.Subject)
+	// #120: strip CR/LF from subject to prevent header injection
+	sanitizedSubject := strings.NewReplacer("\r", "", "\n", "").Replace(n.Subject)
+	subject := fmt.Sprintf("[autobacklog] %s", sanitizedSubject)
 
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
 		e.cfg.SMTP.From,

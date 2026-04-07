@@ -55,14 +55,9 @@ func TestGhEnv_NoTokenWhenEmpty(t *testing.T) {
 	storedPAT = ""
 	patMu.Unlock()
 
-	// Remove GITHUB_TOKEN from process env for this test.
-	prev, hadPrev := os.LookupEnv("GITHUB_TOKEN")
+	// #174: use t.Setenv for parallel safety instead of os.Setenv/Unsetenv
+	t.Setenv("GITHUB_TOKEN", "")
 	os.Unsetenv("GITHUB_TOKEN")
-	t.Cleanup(func() {
-		if hadPrev {
-			os.Setenv("GITHUB_TOKEN", prev)
-		}
-	})
 
 	env := ghEnv()
 	for _, e := range env {

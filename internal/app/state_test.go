@@ -78,7 +78,7 @@ func TestCycleStats_Summary_WithItems(t *testing.T) {
 		"2 implemented",
 		"1 failed",
 		"1 skipped",
-		"2 PR created",
+		"2 PRs created",
 		"✓ Add auth tests [test] → https://github.com/org/repo/pull/42",
 		"✓ Expose user API [refactor] → https://github.com/org/repo/pull/43",
 		"✗ Fix race condition [bug] — failed",

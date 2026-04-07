@@ -5,7 +5,9 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
+	"strings"
 	"log/slog"
 	"net"
 	"net/http"
@@ -38,7 +40,7 @@ func NewServer(port int, hub *Hub, configFn func() any, log *slog.Logger) *Serve
 // Start binds the port eagerly and serves in a background goroutine.
 // Returns an error immediately if the port is already in use.
 func (s *Server) Start() error {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s.port)) // #129: bind localhost only
 	if err != nil {
 		return fmt.Errorf("webui port %d is already in use", s.port)
 	}
@@ -92,6 +94,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // #213: disable reverse proxy buffering
 
 	ch, history := s.hub.Subscribe()
 	defer s.hub.Unsubscribe(ch)
@@ -101,7 +104,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		if typeFilter != "" && string(e.Type) != typeFilter {
 			continue
 		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, e.Data)
+		writeSSEEvent(w, e)
 	}
 	flusher.Flush()
 
@@ -115,12 +118,22 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			if typeFilter != "" && string(e.Type) != typeFilter {
 				continue
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, e.Data)
+			writeSSEEvent(w, e)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}
 	}
+}
+
+// writeSSEEvent writes a properly escaped SSE event. Newlines in data are
+// split into multiple "data:" lines per the SSE specification (#119).
+func writeSSEEvent(w io.Writer, e Event) {
+	fmt.Fprintf(w, "event: %s\n", e.Type)
+	for _, line := range strings.Split(e.Data, "\n") {
+		fmt.Fprintf(w, "data: %s\n", line)
+	}
+	fmt.Fprint(w, "\n")
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {

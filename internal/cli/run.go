@@ -30,9 +30,10 @@ func runOnce(cmd *cobra.Command, args []string) error {
 		defer s.uiServer.Shutdown(context.Background())
 	}
 
-	// If mode is "daemon", loop with the configured interval
+	// #158: if mode is "daemon" in config, warn and run one cycle instead of
+	// silently entering daemon loop. Use the `daemon` subcommand for continuous mode.
 	if s.cfg.Mode == "daemon" {
-		return runDaemonLoop(s.ctx, s.cfg, s.orchestrator, s.log)
+		s.log.Warn("config has mode=daemon but 'run' executes a single cycle; use 'autobacklog daemon' for continuous mode")
 	}
 
 	// Run one cycle (or loop in burndown mode)

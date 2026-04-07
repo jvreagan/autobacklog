@@ -37,8 +37,12 @@ func (r *Repo) WorkDir() string {
 }
 
 // CloneOrPull clones the repo if not present, or pulls latest changes.
+// Uses `git rev-parse --git-dir` instead of os.Stat(".git") for robustness
+// with worktrees and partial clones (#170).
 func (r *Repo) CloneOrPull(ctx context.Context) error {
-	if _, err := os.Stat(r.workDir + "/.git"); err == nil {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
+	cmd.Dir = r.workDir
+	if err := cmd.Run(); err == nil {
 		return r.pull(ctx)
 	}
 	return r.clone(ctx)
@@ -103,19 +107,26 @@ func (r *Repo) run(ctx context.Context, dir string, name string, args ...string)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = os.Environ()
-	if r.pat != "" {
-		// Pass the PAT via environment variable so it is never visible in
-		// process listings. GIT_TERMINAL_PROMPT=0 prevents git from blocking
-		// on interactive auth prompts when credentials are missing.
-		cmd.Env = append(cmd.Env, "GIT_PAT="+r.pat, "GIT_TERMINAL_PROMPT=0")
+
+	// #218: filter out existing GIT_PAT and GIT_TERMINAL_PROMPT to avoid duplicates
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "GIT_PAT=") && !strings.HasPrefix(e, "GIT_TERMINAL_PROMPT=") {
+			env = append(env, e)
+		}
 	}
+	if r.pat != "" {
+		env = append(env, "GIT_PAT="+r.pat, "GIT_TERMINAL_PROMPT=0")
+	}
+	cmd.Env = env
+
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
 		argStr := strings.Join(args, " ")
-		errStr := stderr.String()
+		// #165: trim trailing whitespace/newlines from stderr
+		errStr := strings.TrimSpace(stderr.String())
 		if r.pat != "" {
 			// Redact raw, slash-encoded, and fully URL-encoded forms of the PAT
 			// to prevent credential leakage in error messages and logs.
@@ -129,7 +140,10 @@ func (r *Repo) run(ctx context.Context, dir string, name string, args ...string)
 			argStr = redactAll(argStr)
 			errStr = redactAll(errStr)
 		}
-		return fmt.Errorf("%s %s: %w\n%s", name, argStr, err, errStr)
+		if errStr != "" {
+			return fmt.Errorf("%s %s: %w\n%s", name, argStr, err, errStr)
+		}
+		return fmt.Errorf("%s %s: %w", name, argStr, err)
 	}
 	return nil
 }

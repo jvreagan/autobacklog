@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // CycleCompleteNotification creates a notification for a completed cycle.
@@ -81,10 +82,13 @@ Error:   %s
 	}
 }
 
+// truncate shortens s to at most maxLen runes, appending "..." if truncated.
+// Uses rune-aware slicing to avoid splitting multi-byte UTF-8 characters (#214).
 func truncate(s string, maxLen int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
+	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	runes := []rune(s)
+	return string(runes[:maxLen-3]) + "..."
 }

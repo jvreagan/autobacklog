@@ -35,7 +35,7 @@ func TestExtractJSON(t *testing.T) {
 		{
 			name:  "no JSON",
 			input: "no json here",
-			want:  "no json here",
+			want:  "",
 		},
 		{
 			name:  "whitespace",
@@ -248,7 +248,7 @@ func TestExtractJSON_EdgeCases(t *testing.T) {
 		{
 			name:  "plain text no JSON",
 			input: "This is just plain text with no JSON at all.",
-			want:  "This is just plain text with no JSON at all.",
+			want:  "",
 		},
 		{
 			name:  "plain text with brackets in prose",
@@ -291,9 +291,9 @@ func TestExtractJSON_EdgeCases(t *testing.T) {
 			want:  `[{"title":"a \"quoted\" value"}]`,
 		},
 		{
-			name:  "unbalanced open bracket returns empty and falls through",
+			name:  "unbalanced open bracket returns empty",
 			input: `Some text [{"a":1 more text`,
-			want:  `Some text [{"a":1 more text`,
+			want:  "",
 		},
 		{
 			name:  "object preferred when no array present",

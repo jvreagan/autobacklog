@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/jamesreagan/autobacklog/internal/config"
 )
@@ -18,6 +19,8 @@ type Client struct {
 	cfg        config.ClaudeConfig
 	budget     *Budget
 	log        *slog.Logger
+
+	sinkMu     sync.Mutex // #151: protects stdoutSink/stderrSink
 	stdoutSink io.Writer
 	stderrSink io.Writer
 }
@@ -35,7 +38,10 @@ func NewClient(cfg config.ClaudeConfig, log *slog.Logger) *Client {
 
 // SetOutputWriters overrides the default stdout/stderr sinks used when
 // streaming Claude CLI output to the terminal.
+// Must be called during initialization, before any Run/RunPrint calls (#151).
 func (c *Client) SetOutputWriters(stdout, stderr io.Writer) {
+	c.sinkMu.Lock()
+	defer c.sinkMu.Unlock()
 	c.stdoutSink = stdout
 	c.stderrSink = stderr
 }
@@ -73,9 +79,10 @@ func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error
 		c.budget.Record(resp.Cost.Total)
 		c.log.Info("claude invocation complete", "cost", fmt.Sprintf("$%.4f", resp.Cost.Total), "budget_status", c.budget.String())
 	} else {
-		// Record the max per-call budget as a conservative estimate
-		c.budget.Record(c.cfg.MaxBudgetPerCall)
-		c.log.Warn("could not parse cost from output, recording max budget per call")
+		// #153: record a smaller fallback instead of MaxBudgetPerCall
+		fallback := c.cfg.MaxBudgetPerCall * 0.1
+		c.budget.Record(fallback)
+		c.log.Warn("could not parse cost from output, recording conservative estimate", "fallback", fmt.Sprintf("$%.4f", fallback))
 	}
 
 	return output, nil
@@ -117,13 +124,18 @@ func (c *Client) execute(ctx context.Context, workDir, prompt string, jsonOutput
 	cmd.Dir = workDir
 	cmd.Env = filteredEnv()
 
+	c.sinkMu.Lock()
+	stdoutSink := c.stdoutSink
+	stderrSink := c.stderrSink
+	c.sinkMu.Unlock()
+
 	var stdout, stderr bytes.Buffer
 	if jsonOutput {
-		cmd.Stdout = &limitedWriter{w: &stdout, limit: maxOutputBytes}
+		cmd.Stdout = &LimitedWriter{W: &stdout, Limit: maxOutputBytes}
 	} else {
-		cmd.Stdout = io.MultiWriter(&limitedWriter{w: &stdout, limit: maxOutputBytes}, c.stdoutSink)
+		cmd.Stdout = io.MultiWriter(&LimitedWriter{W: &stdout, Limit: maxOutputBytes}, stdoutSink)
 	}
-	cmd.Stderr = io.MultiWriter(&limitedWriter{w: &stderr, limit: maxOutputBytes}, c.stderrSink)
+	cmd.Stderr = io.MultiWriter(&LimitedWriter{W: &stderr, Limit: maxOutputBytes}, stderrSink)
 
 	err := cmd.Run()
 	if err != nil {
@@ -143,18 +155,20 @@ func (c *Client) execute(ctx context.Context, workDir, prompt string, jsonOutput
 	return stdout.String(), nil
 }
 
-// maxOutputBytes is the maximum size of captured stdout/stderr from the Claude CLI (100 MB).
-const maxOutputBytes = 100 * 1024 * 1024
+// maxOutputBytes is the maximum size of captured stdout/stderr from the Claude CLI (10 MB).
+// Reduced from 100 MB to avoid OOM on constrained systems (#199).
+const maxOutputBytes = 10 * 1024 * 1024
 
-// limitedWriter wraps an io.Writer and stops writing after limit bytes.
-type limitedWriter struct {
-	w       *bytes.Buffer
-	limit   int
-	written int
+// LimitedWriter wraps an io.Writer and stops writing after Limit bytes.
+// Exported so it can be shared with the runner package (#197).
+type LimitedWriter struct {
+	W       io.Writer
+	Limit   int
+	Written int
 }
 
-func (lw *limitedWriter) Write(p []byte) (int, error) {
-	remaining := lw.limit - lw.written
+func (lw *LimitedWriter) Write(p []byte) (int, error) {
+	remaining := lw.Limit - lw.Written
 	if remaining <= 0 {
 		return len(p), nil // discard silently
 	}
@@ -162,8 +176,8 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 	if len(p) > remaining {
 		p = p[:remaining]
 	}
-	n, err := lw.w.Write(p)
-	lw.written += n
+	n, err := lw.W.Write(p)
+	lw.Written += n
 	if err != nil {
 		return n, err
 	}
@@ -174,10 +188,28 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 
 // filteredEnv returns the current environment with the CLAUDECODE variable
 // removed, which prevents the "nested session" check from blocking invocation.
+// Also filters sensitive environment variables (#200).
 func filteredEnv() []string {
+	// Prefixes of sensitive env vars to exclude from Claude subprocess.
+	sensitivePrefix := []string{
+		"AWS_SECRET", "AWS_SESSION_TOKEN",
+		"DATABASE_", "DB_PASSWORD", "DB_",
+		"PRIVATE_KEY", "SECRET_",
+	}
 	var env []string
 	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "CLAUDECODE=") {
+		if strings.HasPrefix(e, "CLAUDECODE=") {
+			continue
+		}
+		key := e[:strings.IndexByte(e, '=')]
+		skip := false
+		for _, prefix := range sensitivePrefix {
+			if strings.HasPrefix(strings.ToUpper(key), prefix) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
 			env = append(env, e)
 		}
 	}

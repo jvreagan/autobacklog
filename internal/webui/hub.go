@@ -17,19 +17,21 @@ type Event struct {
 }
 
 // Hub is an SSE broadcaster that fans out events to connected clients
-// and keeps a ring buffer of recent history for new subscribers.
+// and keeps a circular buffer of recent history for new subscribers.
 type Hub struct {
 	mu          sync.RWMutex
 	clients     map[chan Event]struct{}
 	history     []Event
 	historySize int
+	head        int // #160: circular buffer index for O(1) insertion
+	count       int // number of events stored
 }
 
 // NewHub creates a hub that retains up to historySize events.
 func NewHub(historySize int) *Hub {
 	return &Hub{
 		clients:     make(map[chan Event]struct{}),
-		history:     make([]Event, 0, historySize),
+		history:     make([]Event, historySize),
 		historySize: historySize,
 	}
 }
@@ -43,8 +45,12 @@ func (h *Hub) Subscribe() (chan Event, []Event) {
 	ch := make(chan Event, 256)
 	h.clients[ch] = struct{}{}
 
-	snap := make([]Event, len(h.history))
-	copy(snap, h.history)
+	// Build snapshot in chronological order from circular buffer.
+	snap := make([]Event, 0, h.count)
+	for i := 0; i < h.count; i++ {
+		idx := (h.head - h.count + i + h.historySize) % h.historySize
+		snap = append(snap, h.history[idx])
+	}
 
 	return ch, snap
 }
@@ -54,6 +60,10 @@ func (h *Hub) Unsubscribe(ch chan Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// #212: guard against double-close panic
+	if _, ok := h.clients[ch]; !ok {
+		return
+	}
 	delete(h.clients, ch)
 	close(ch)
 }
@@ -61,24 +71,31 @@ func (h *Hub) Unsubscribe(ch chan Event) {
 // Broadcast sends an event to all connected clients (non-blocking).
 // Slow clients that can't keep up have events dropped.
 func (h *Hub) Broadcast(e Event) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	// Append to ring buffer
-	if len(h.history) < h.historySize {
-		h.history = append(h.history, e)
-	} else if h.historySize > 0 {
-		// Shift left and overwrite the last slot
-		copy(h.history, h.history[1:])
-		h.history[h.historySize-1] = e
-	}
-
-	// Fan out to clients
+	// #161: take a snapshot of clients under read lock, then send without holding the lock.
+	h.mu.RLock()
+	clients := make([]chan Event, 0, len(h.clients))
 	for ch := range h.clients {
+		clients = append(clients, ch)
+	}
+	h.mu.RUnlock()
+
+	// Fan out to clients without holding any lock.
+	for _, ch := range clients {
 		select {
 		case ch <- e:
 		default:
 			// drop for slow client
 		}
 	}
+
+	// Update ring buffer under write lock.
+	h.mu.Lock()
+	if h.historySize > 0 {
+		h.history[h.head] = e
+		h.head = (h.head + 1) % h.historySize
+		if h.count < h.historySize {
+			h.count++
+		}
+	}
+	h.mu.Unlock()
 }

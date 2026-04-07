@@ -67,12 +67,9 @@ func TestFormatPRBody_BacktickEscaping(t *testing.T) {
 	testOutput := "output\n```\ncode block\n```\nmore output"
 	body := FormatPRBody("Fix", "desc", "bug", testOutput, 0)
 
-	// Triple backticks inside test results should be escaped to prevent
-	// breaking the outer code fence.
-	if strings.Contains(body, "```\ncode block\n```") {
-		t.Error("backtick sequences in test output should be escaped")
-	}
-	if !strings.Contains(body, "` ` `") {
-		t.Error("expected escaped backticks in body")
+	// #166: dynamic fence — longest backtick run is 3, so fence should be 4 backticks.
+	// The raw test output is preserved (not escaped), wrapped in ```` fences.
+	if !strings.Contains(body, "````\n"+testOutput+"\n````") {
+		t.Errorf("expected 4-backtick fence wrapping raw output, got:\n%s", body)
 	}
 }

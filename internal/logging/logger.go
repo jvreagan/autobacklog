@@ -5,8 +5,15 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/jamesreagan/autobacklog/internal/config"
+)
+
+// #210: protect logCleanup with a mutex for goroutine safety
+var (
+	logMu      sync.Mutex
+	logCleanup func()
 )
 
 // Setup initializes the global slog logger from config.
@@ -38,10 +45,13 @@ func Setup(cfg config.LoggingConfig) (*slog.Logger, error) {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	// Store cleanup so callers can close the file.
-	// Since changing the return signature would break callers,
-	// we register the cleanup via a package-level variable.
+	// #154: call previous cleanup before storing new one
+	logMu.Lock()
+	if logCleanup != nil {
+		logCleanup()
+	}
 	logCleanup = cleanup
+	logMu.Unlock()
 
 	return logger, nil
 }
@@ -75,16 +85,21 @@ func SetupWithExtraWriter(cfg config.LoggingConfig, extra io.Writer) (*slog.Logg
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
+	// #154: call previous cleanup before storing new one
+	logMu.Lock()
+	if logCleanup != nil {
+		logCleanup()
+	}
 	logCleanup = cleanup
+	logMu.Unlock()
 
 	return logger, nil
 }
 
-// logCleanup holds the function to close the log file, if any.
-var logCleanup func()
-
 // Cleanup closes the log file handle opened by Setup, if any.
 func Cleanup() {
+	logMu.Lock()
+	defer logMu.Unlock()
 	if logCleanup != nil {
 		logCleanup()
 		logCleanup = nil

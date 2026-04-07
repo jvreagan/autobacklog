@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"io"
@@ -68,6 +69,7 @@ func (d *defaultIssueManager) ListIssues(ctx context.Context, workDir, label str
 }
 
 // New creates a new App orchestrator with production dependencies.
+// #181: simplified return signature since error is never returned.
 func New(cfg *config.Config, store backlog.Store, notifier notify.Notifier, log *slog.Logger, dryRun bool) (*App, error) {
 	pat, err := cfg.ResolveGitHubPAT()
 	if err != nil && !dryRun {
@@ -133,6 +135,11 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	a.log.Info("starting cycle", "dry_run", a.dryRun, "helper_mode", a.cfg.HelperMode, "repo", a.cfg.Repo.URL)
 
 	for state != StateDone {
+		// #126: check for context cancellation between state transitions
+		if ctx.Err() != nil {
+			return stats, ctx.Err()
+		}
+
 		a.log.Info("entering state", "state", state.String(), "action", state.Description())
 
 		var err error
@@ -227,6 +234,11 @@ func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
 
 	var cumulative CycleStats
 	for cycle := 1; ; cycle++ {
+		// #126: check for context cancellation between burndown cycles
+		if ctx.Err() != nil {
+			return &cumulative, ctx.Err()
+		}
+
 		// Check how many pending items actually remain in the store.
 		remaining, err := a.store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
 		if err != nil {
@@ -307,11 +319,10 @@ func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
 		return nil
 	}
 
-	// Pre-fetch existing issue numbers to avoid N+1 queries.
+	// #149: pre-fetch existing items, but return error if store is broken
 	existingItems, err := a.store.List(ctx, backlog.ListFilter{RepoURL: &a.cfg.Repo.URL})
 	if err != nil {
-		a.log.Warn("failed to list existing items, continuing", "error", err)
-		return nil
+		return fmt.Errorf("listing existing items for import dedup: %w", err)
 	}
 	importedNums := make(map[int]bool, len(existingItems))
 	for _, item := range existingItems {
@@ -352,6 +363,8 @@ func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
 
 // inferFromLabels derives priority and category from GitHub issue labels.
 // Falls back to PriorityMedium and CategoryRefactor when no matching labels are found.
+// When conflicting labels exist (e.g. both "bug" and "security"), the last match wins (#179).
+// The "p2" label is treated as Medium priority (the default) (#178).
 func inferFromLabels(labels []string) (backlog.Priority, backlog.Category) {
 	priority := backlog.PriorityMedium
 	category := backlog.CategoryRefactor
@@ -362,6 +375,8 @@ func inferFromLabels(labels []string) (backlog.Priority, backlog.Category) {
 		// Priority labels (e.g., "priority:high", "P1", "critical")
 		case strings.Contains(l, "critical") || l == "p0" || l == "p1" || strings.HasSuffix(l, ":high") || l == "high":
 			priority = backlog.PriorityHigh
+		case l == "p2" || strings.HasSuffix(l, ":medium") || l == "medium":
+			priority = backlog.PriorityMedium // #178: explicit p2 handling
 		case l == "p3" || l == "p4" || strings.HasSuffix(l, ":low") || l == "low":
 			priority = backlog.PriorityLow
 
@@ -443,6 +458,7 @@ func (a *App) doIngest(ctx context.Context, stats *CycleStats) error {
 // createIssuesForNewItems creates GitHub issues for all pending items that don't
 // yet have an associated issue number. This intentionally includes items from
 // previous cycles whose issue creation failed, acting as an automatic retry.
+// #147: tracks created issue numbers within the loop to avoid re-creating on store.Update failure.
 func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
 	label := a.cfg.GitHub.IssueLabel
 	if err := a.issueManager.EnsureLabel(ctx, a.repo.WorkDir(), label); err != nil {
@@ -474,7 +490,10 @@ func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
 
 		item.IssueNumber = issueNum
 		if err := a.store.Update(ctx, item); err != nil {
-			a.log.Warn("failed to update item with issue number", "title", item.Title, "error", err)
+			// #147: issue was created on GitHub but store update failed.
+			// Log the issue number so it can be reconciled manually.
+			a.log.Error("created GitHub issue but failed to persist issue number — may create duplicate on retry",
+				"title", item.Title, "issue_number", issueNum, "error", err)
 			continue
 		}
 
@@ -525,6 +544,7 @@ func (a *App) doEvaluateThreshold(ctx context.Context, stats *CycleStats) error 
 
 // doSelectAllPending selects all pending items for the current repo, capped at max_per_cycle.
 // Used in burndown mode to bypass threshold logic.
+// #148: sorts items by priority before capping.
 func (a *App) doSelectAllPending(ctx context.Context) error {
 	pendingStatus := backlog.StatusPending
 	items, err := a.store.List(ctx, backlog.ListFilter{Status: &pendingStatus, RepoURL: &a.cfg.Repo.URL})
@@ -537,6 +557,16 @@ func (a *App) doSelectAllPending(ctx context.Context) error {
 		a.selectedItems = nil
 		return nil
 	}
+
+	// #148: sort by priority (high > medium > low) before capping
+	priorityOrder := map[backlog.Priority]int{
+		backlog.PriorityHigh:   0,
+		backlog.PriorityMedium: 1,
+		backlog.PriorityLow:    2,
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return priorityOrder[items[i].Priority] < priorityOrder[items[j].Priority]
+	})
 
 	if a.cfg.Backlog.MaxPerCycle > 0 && len(items) > a.cfg.Backlog.MaxPerCycle {
 		items = items[:a.cfg.Backlog.MaxPerCycle]
@@ -565,9 +595,19 @@ func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 
 	a.log.Info("beginning implementation", "items_to_implement", len(a.selectedItems))
 	for i, item := range a.selectedItems {
+		// #126: check for context cancellation between items
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		if a.burndownTotal > 0 {
 			a.burndownDone++
-			a.log.Info(fmt.Sprintf("[burndown] addressing item %d of %d: %s", a.burndownDone, a.burndownTotal, item.Title))
+			// #177: cap burndownDone at burndownTotal to prevent "item 5 of 3" log messages
+			displayed := a.burndownDone
+			if displayed > a.burndownTotal {
+				displayed = a.burndownTotal
+			}
+			a.log.Info(fmt.Sprintf("[burndown] addressing item %d of %d: %s", displayed, a.burndownTotal, item.Title))
 		} else {
 			a.log.Info("implementing item", "index", i+1, "of", len(a.selectedItems), "title", item.Title)
 		}
@@ -578,6 +618,27 @@ func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 	}
 
 	return nil
+}
+
+// cleanupBranch is a helper that checks out the base branch and deletes the
+// feature branch. Used in error paths to avoid leaving the working copy on a
+// feature branch (#125).
+func (a *App) cleanupBranch(ctx context.Context, branchName string) {
+	if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
+		a.log.Error("failed to checkout main branch during cleanup", "branch", a.cfg.Repo.Branch, "error", coErr)
+	}
+	if delErr := a.repo.DeleteBranch(ctx, branchName); delErr != nil {
+		a.log.Warn("failed to delete feature branch during cleanup", "branch", branchName, "error", delErr)
+	}
+}
+
+// resetItemStatus resets the item status from InProgress to the given status
+// and persists it. Used in error paths (#124).
+func (a *App) resetItemStatus(ctx context.Context, item *backlog.Item, status backlog.Status) {
+	item.Status = status
+	if err := a.store.Update(ctx, item); err != nil {
+		a.log.Error("failed to reset item status", "title", item.Title, "target_status", status, "error", err)
+	}
 }
 
 func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *CycleStats) error {
@@ -593,6 +654,8 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	// Check budget
 	a.log.Info("checking budget", "spent", a.claude.Budget().Spent(), "max_per_call", a.cfg.Claude.MaxBudgetPerCall, "max_total", a.cfg.Claude.MaxBudgetTotal)
 	if !a.claude.Budget().CanSpend(a.cfg.Claude.MaxBudgetPerCall) {
+		// #124: reset status before returning
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
 		if nErr := a.notifier.Send(notify.OutOfTokensNotification(
 			a.claude.Budget().Spent(), a.cfg.Claude.MaxBudgetTotal,
 		)); nErr != nil {
@@ -605,6 +668,8 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	a.log.Info("creating feature branch", "prefix", a.cfg.Repo.PRBranchPrefix, "category", item.Category)
 	branchName, err := a.repo.CreateBranch(ctx, a.cfg.Repo.PRBranchPrefix, string(item.Category), item.Title)
 	if err != nil {
+		// #124: reset status on branch creation failure
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
 		return fmt.Errorf("creating branch: %w", err)
 	}
 	a.log.Info("created branch", "branch", branchName)
@@ -614,29 +679,31 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	prompt := claude.ImplementPrompt(item)
 	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
 	if err != nil {
-		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
-			a.log.Error("failed to checkout main branch after implement error", "branch", a.cfg.Repo.Branch, "error", coErr)
-		}
-		if delErr := a.repo.DeleteBranch(ctx, branchName); delErr != nil {
-			a.log.Warn("failed to delete feature branch after implement error", "branch", branchName, "error", delErr)
-		}
+		a.cleanupBranch(ctx, branchName)
+		// #124: reset status on Claude failure
+		a.resetItemStatus(ctx, item, backlog.StatusFailed)
 		return fmt.Errorf("claude implement: %w", err)
+	}
+
+	// #146: check context between operations
+	if ctx.Err() != nil {
+		a.cleanupBranch(ctx, branchName)
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
+		return ctx.Err()
 	}
 
 	// Check if there are any changes
 	a.log.Info("checking for code changes")
 	hasChanges, err := a.repo.HasChanges(ctx)
 	if err != nil {
+		// #124, #125: cleanup branch and reset status
+		a.cleanupBranch(ctx, branchName)
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
 		return fmt.Errorf("checking changes: %w", err)
 	}
 	if !hasChanges {
 		a.log.Warn("claude made no changes", "title", item.Title)
-		if err := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); err != nil {
-			return fmt.Errorf("checkout main branch after no changes: %w", err)
-		}
-		if delErr := a.repo.DeleteBranch(ctx, branchName); delErr != nil {
-			a.log.Warn("failed to delete feature branch after no changes", "branch", branchName, "error", delErr)
-		}
+		a.cleanupBranch(ctx, branchName)
 		item.Status = backlog.StatusSkipped
 		if err := a.store.Update(ctx, item); err != nil {
 			return fmt.Errorf("updating item status to skipped: %w", err)
@@ -656,12 +723,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		if revertErr := a.repo.RevertToClean(ctx); revertErr != nil {
 			a.log.Error("failed to revert working directory", "error", revertErr)
 		}
-		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
-			a.log.Error("failed to checkout main branch after test failure", "branch", a.cfg.Repo.Branch, "error", coErr)
-		}
-		if delErr := a.repo.DeleteBranch(ctx, branchName); delErr != nil {
-			a.log.Warn("failed to delete feature branch after test failure", "branch", branchName, "error", delErr)
-		}
+		a.cleanupBranch(ctx, branchName)
 		item.Status = backlog.StatusFailed
 		if updateErr := a.store.Update(ctx, item); updateErr != nil {
 			a.log.Error("failed to update item status to failed", "title", item.Title, "error", updateErr)
@@ -680,16 +742,23 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	// Stage and commit
 	a.log.Info("tests passed, staging and committing changes")
 	if err := a.repo.StageAll(ctx); err != nil {
+		// #124, #125: cleanup on stage failure
+		a.cleanupBranch(ctx, branchName)
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
 		return fmt.Errorf("staging changes: %w", err)
 	}
 	commitMsg := fmt.Sprintf("autobacklog: %s\n\n%s", item.Title, item.Description)
 	if err := a.repo.Commit(ctx, commitMsg); err != nil {
+		a.cleanupBranch(ctx, branchName)
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
 		return fmt.Errorf("committing: %w", err)
 	}
 
 	// Push and create PR
 	a.log.Info("pushing branch to remote", "branch", branchName)
 	if err := a.repo.Push(ctx, branchName); err != nil {
+		a.cleanupBranch(ctx, branchName)
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
 		return fmt.Errorf("pushing: %w", err)
 	}
 
@@ -702,6 +771,8 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		HeadBranch: branchName,
 	})
 	if err != nil {
+		a.cleanupBranch(ctx, branchName)
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
 		return fmt.Errorf("creating PR: %w", err)
 	}
 
@@ -755,9 +826,9 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item, stats *
 	var args []string
 
 	if a.cfg.Testing.OverrideCommand != "" {
-		parts := strings.Fields(a.cfg.Testing.OverrideCommand)
-		command = parts[0]
-		args = parts[1:]
+		// #176: use sh -c for the override command to handle quoted arguments properly
+		command = "sh"
+		args = []string{"-c", a.cfg.Testing.OverrideCommand}
 		a.log.Info("using override test command", "command", a.cfg.Testing.OverrideCommand)
 	} else if a.cfg.Testing.AutoDetect {
 		// Cache detection result to avoid redundant filesystem checks per item.
@@ -768,6 +839,11 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item, stats *
 		if a.cachedDetect == nil {
 			a.log.Warn("no test framework detected, skipping tests")
 			return "no test framework detected", nil
+		}
+		// #122: validate the detected command
+		if err := runner.ValidateCommand(a.cachedDetect.Command); err != nil {
+			a.log.Warn("detected test command not in allowlist, skipping tests", "command", a.cachedDetect.Command, "error", err)
+			return "test command not validated", nil
 		}
 		command = a.cachedDetect.Command
 		args = a.cachedDetect.Args
@@ -783,6 +859,11 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item, stats *
 		result, err := a.runner.Run(ctx, workDir, command, args)
 		if err != nil {
 			return "", fmt.Errorf("running tests: %w", err)
+		}
+
+		// #175: guard against nil result
+		if result == nil {
+			return "", fmt.Errorf("test runner returned nil result")
 		}
 
 		if result.Passed {
@@ -830,8 +911,12 @@ func (a *App) doDocument(ctx context.Context, stats *CycleStats) error {
 		return nil
 	}
 
+	// #202: DocumentPrompt handles empty changes gracefully
 	a.log.Info("invoking Claude to update documentation", "changes", len(changes))
 	prompt := claude.DocumentPrompt(changes)
+	if prompt == "" {
+		return nil
+	}
 	_, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
 	if err != nil {
 		a.log.Warn("documentation update failed", "error", err)

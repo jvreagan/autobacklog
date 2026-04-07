@@ -14,7 +14,11 @@ type Budget struct {
 }
 
 // NewBudget creates a budget tracker with a total spending limit.
+// Negative maxTotal is treated as zero (#150).
 func NewBudget(maxTotal float64) *Budget {
+	if maxTotal < 0 {
+		maxTotal = 0
+	}
 	return &Budget{maxTotal: maxTotal}
 }
 
@@ -26,7 +30,11 @@ func (b *Budget) CanSpend(amount float64) bool {
 }
 
 // Record records spending from an invocation.
+// Negative amounts are ignored (#150).
 func (b *Budget) Record(amount float64) {
+	if amount < 0 {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spent += amount
@@ -55,8 +63,13 @@ func (b *Budget) Invocations() int {
 }
 
 // String returns a human-readable budget status.
+// Handles singular/plural for "invocation(s)" (#201).
 func (b *Budget) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return fmt.Sprintf("$%.2f / $%.2f spent (%d invocations)", b.spent, b.maxTotal, b.invocations)
+	noun := "invocations"
+	if b.invocations == 1 {
+		noun = "invocation"
+	}
+	return fmt.Sprintf("$%.2f / $%.2f spent (%d %s)", b.spent, b.maxTotal, b.invocations, noun)
 }

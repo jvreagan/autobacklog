@@ -123,7 +123,14 @@ func (s *CycleStats) Merge(other *CycleStats) {
 	s.TestFailures += other.TestFailures
 	s.Errors = append(s.Errors, other.Errors...)
 	s.Items = append(s.Items, other.Items...)
-	s.BudgetSummary = other.BudgetSummary
+	// #216: accumulate budget summaries instead of overwriting
+	if other.BudgetSummary != "" {
+		if s.BudgetSummary != "" {
+			s.BudgetSummary += "; " + other.BudgetSummary
+		} else {
+			s.BudgetSummary = other.BudgetSummary
+		}
+	}
 }
 
 // Summary returns a human-readable summary of the cycle.
@@ -158,14 +165,27 @@ func (s *CycleStats) Summary() string {
 	if skipped > 0 {
 		parts = append(parts, fmt.Sprintf("%d skipped", skipped))
 	}
+	// #180: correct singular/plural grammar
 	if s.PRsCreated > 0 {
-		parts = append(parts, fmt.Sprintf("%d PR created", s.PRsCreated))
+		noun := "PRs"
+		if s.PRsCreated == 1 {
+			noun = "PR"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s created", s.PRsCreated, noun))
 	}
 	if s.IssuesImported > 0 {
-		parts = append(parts, fmt.Sprintf("%d issues imported", s.IssuesImported))
+		noun := "issues"
+		if s.IssuesImported == 1 {
+			noun = "issue"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s imported", s.IssuesImported, noun))
 	}
 	if s.IssuesCreated > 0 {
-		parts = append(parts, fmt.Sprintf("%d issues created", s.IssuesCreated))
+		noun := "issues"
+		if s.IssuesCreated == 1 {
+			noun = "issue"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s created", s.IssuesCreated, noun))
 	}
 
 	var b strings.Builder

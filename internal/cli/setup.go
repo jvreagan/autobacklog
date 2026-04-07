@@ -86,6 +86,10 @@ func setup() (*setupResult, error) {
 	dbPath := filepath.Join(home, ".autobacklog", "backlog.db")
 	store, err := backlog.NewSQLiteStore(dbPath)
 	if err != nil {
+		// #155: shut down UI server if it was already started
+		if uiServer != nil {
+			uiServer.Shutdown(context.Background())
+		}
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
@@ -128,6 +132,10 @@ func setup() (*setupResult, error) {
 	if err != nil {
 		store.Close()
 		cancel()
+		// #155: shut down UI server on orchestrator creation failure
+		if uiServer != nil {
+			uiServer.Shutdown(context.Background())
+		}
 		return nil, fmt.Errorf("creating orchestrator: %w", err)
 	}
 
@@ -187,11 +195,11 @@ func sanitizeConfig(cfg *config.Config) map[string]any {
 		"notifications": map[string]any{
 			"enabled": cfg.Notifications.Enabled,
 			"smtp": map[string]any{
-				"host":     cfg.Notifications.SMTP.Host,
-				"port":     cfg.Notifications.SMTP.Port,
+				"host":     redact(cfg.Notifications.SMTP.Host), // #211: redact infrastructure details
+				"port":     0,                                   // #211: redact port
 				"username": redact(cfg.Notifications.SMTP.Username),
 				"password": redact(cfg.Notifications.SMTP.Password),
-				"from":     cfg.Notifications.SMTP.From,
+				"from":     redact(cfg.Notifications.SMTP.From), // #211: redact from address
 			},
 		},
 		"logging": map[string]any{

@@ -57,8 +57,33 @@ type Item struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// ValidPriority returns true if p is a recognized priority value.
+func ValidPriority(p Priority) bool {
+	switch p {
+	case PriorityHigh, PriorityMedium, PriorityLow:
+		return true
+	}
+	return false
+}
+
+// ValidCategory returns true if c is a recognized category value.
+func ValidCategory(c Category) bool {
+	switch c {
+	case CategoryBug, CategorySecurity, CategoryPerformance, CategoryRefactor, CategoryTest, CategoryDocs, CategoryStyle:
+		return true
+	}
+	return false
+}
+
 // NewItem creates a new backlog item with a generated ID and timestamps.
+// Invalid priority defaults to PriorityLow; invalid category defaults to CategoryRefactor (#135).
 func NewItem(title, description, filePath string, priority Priority, category Category) *Item {
+	if !ValidPriority(priority) {
+		priority = PriorityLow
+	}
+	if !ValidCategory(category) {
+		category = CategoryRefactor
+	}
 	now := time.Now().UTC()
 	return &Item{
 		ID:          uuid.New().String(),
