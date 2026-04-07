@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 )
 
 // Manager handles ingestion, deduplication, and selection of backlog items.
@@ -39,6 +40,10 @@ func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) 
 
 	inserted := 0
 	for _, item := range newItems {
+		// #187: skip nil items to prevent panics
+		if item == nil {
+			continue
+		}
 		item.RepoURL = repoURL
 
 		key := dedupKey{strings.ToLower(strings.TrimSpace(item.Title)), item.FilePath}
@@ -70,7 +75,8 @@ func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) 
 // (e.g., "Fix bug" matching "Fix bug in authentication handler").
 func (m *Manager) isFuzzyDuplicate(newItem *Item, existing []*Item) bool {
 	newTitle := strings.ToLower(strings.TrimSpace(newItem.Title))
-	if len(newTitle) < 20 {
+	// #136: use rune count instead of byte length for multi-byte UTF-8 titles
+	if utf8.RuneCountInString(newTitle) < 20 {
 		return false
 	}
 	for _, ex := range existing {
@@ -78,7 +84,7 @@ func (m *Manager) isFuzzyDuplicate(newItem *Item, existing []*Item) bool {
 			continue
 		}
 		exTitle := strings.ToLower(strings.TrimSpace(ex.Title))
-		if len(exTitle) < 20 {
+		if utf8.RuneCountInString(exTitle) < 20 {
 			continue
 		}
 		if strings.Contains(newTitle, exTitle) || strings.Contains(exTitle, newTitle) {

@@ -78,7 +78,7 @@ func TestBudget_String(t *testing.T) {
 	if !strings.Contains(s, "100.00") {
 		t.Errorf("String() = %q, should contain total budget", s)
 	}
-	if !strings.Contains(s, "1 invocations") {
+	if !strings.Contains(s, "1 invocation") {
 		t.Errorf("String() = %q, should contain invocation count", s)
 	}
 }

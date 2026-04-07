@@ -143,6 +143,63 @@ func TestManager_Ingest_NilSlice(t *testing.T) {
 	}
 }
 
+// #187: Ingest with nil item in slice should not panic.
+func TestManager_Ingest_NilItem(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	ctx := context.Background()
+
+	items := []*Item{
+		NewItem("Valid", "desc", "a.go", PriorityHigh, CategoryBug),
+		nil, // should not panic
+	}
+
+	// This would panic before the nil guard was added
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Ingest panicked on nil item: %v", r)
+		}
+	}()
+	mgr.Ingest(ctx, "", items)
+}
+
+// #188: isFuzzyDuplicate edge cases.
+func TestManager_Ingest_FuzzyDuplicateEdgeCases(t *testing.T) {
+	mgr, store := newTestManager(t)
+	ctx := context.Background()
+
+	// Existing item with a long title
+	existing := NewItem("Fix authentication handler null pointer dereference", "desc", "handler.go", PriorityHigh, CategoryBug)
+	if err := store.Insert(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		title     string
+		file      string
+		wantInsert bool
+	}{
+		{"substring match same file", "Fix authentication handler null pointer", "handler.go", false},
+		{"different file not matched", "Fix authentication handler null pointer", "other.go", true},
+		{"short title bypasses fuzzy", "Fix auth", "handler.go", true},
+		{"exact match same file", "Fix authentication handler null pointer dereference", "handler.go", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items := []*Item{NewItem(tt.title, "desc", tt.file, PriorityHigh, CategoryBug)}
+			n, err := mgr.Ingest(ctx, "", items)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inserted := n == 1
+			if inserted != tt.wantInsert {
+				t.Errorf("inserted = %v, want %v", inserted, tt.wantInsert)
+			}
+		})
+	}
+}
+
 func TestManager_Ingest_CrossRepoDedupIsolation(t *testing.T) {
 	mgr, store := newTestManager(t)
 	ctx := context.Background()

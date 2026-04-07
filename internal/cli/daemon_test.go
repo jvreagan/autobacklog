@@ -5,32 +5,7 @@ import (
 	"time"
 )
 
-// isQuietHoursAt is a test helper that checks quiet hours at a specific time.
-// We extract the logic from isQuietHours so we can test with deterministic times.
-func isQuietHoursAt(start, end string, now time.Time) bool {
-	if start == "" || end == "" {
-		return false
-	}
-
-	startTime, err := time.Parse("15:04", start)
-	if err != nil {
-		return false
-	}
-	endTime, err := time.Parse("15:04", end)
-	if err != nil {
-		return false
-	}
-
-	currentMinutes := now.Hour()*60 + now.Minute()
-	startMinutes := startTime.Hour()*60 + startTime.Minute()
-	endMinutes := endTime.Hour()*60 + endTime.Minute()
-
-	if startMinutes <= endMinutes {
-		return currentMinutes >= startMinutes && currentMinutes < endMinutes
-	}
-	// Spans midnight
-	return currentMinutes >= startMinutes || currentMinutes < endMinutes
-}
+// #156: isQuietHoursAt is now defined in daemon.go, so tests use the real function.
 
 func TestIsQuietHours_Deterministic(t *testing.T) {
 	tests := []struct {

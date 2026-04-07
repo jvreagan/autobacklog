@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 func TestInterpolateEnvVars(t *testing.T) {
@@ -265,61 +263,83 @@ func TestLoadInvalidYAML(t *testing.T) {
 	}
 }
 
+// #205: test warnLiteralSecrets by calling the function directly
+// instead of re-implementing the detection logic.
 func TestWarnLiteralSecrets(t *testing.T) {
 	tests := []struct {
-		name        string
-		rawYAML     string
-		expectWarn  bool
+		name    string
+		rawYAML string
 	}{
 		{
-			name: "literal password triggers warning",
+			name: "literal password does not panic",
 			rawYAML: `
 notifications:
   smtp:
     password: "hunter2"
 `,
-			expectWarn: true,
 		},
 		{
-			name: "env var reference does not trigger warning",
+			name: "env var reference does not panic",
 			rawYAML: `
 notifications:
   smtp:
     password: "${SMTP_PASSWORD}"
 `,
-			expectWarn: false,
 		},
 		{
-			name: "empty password does not trigger warning",
+			name: "empty password does not panic",
 			rawYAML: `
 notifications:
   smtp:
     host: "smtp.example.com"
 `,
-			expectWarn: false,
 		},
 		{
-			name: "mixed literal and env var triggers warning",
+			name: "literal GitHub PAT does not panic",
 			rawYAML: `
-notifications:
-  smtp:
-    password: "prefix_${SMTP_PASSWORD}"
+github:
+  pat: "ghp_secret123"
 `,
-			expectWarn: true,
+		},
+		{
+			name: "env var GitHub PAT does not panic",
+			rawYAML: `
+github:
+  pat: "${GITHUB_TOKEN}"
+`,
+		},
+		{
+			name: "invalid YAML does not panic",
+			rawYAML: `{{invalid`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// warnLiteralSecrets uses slog; we verify it doesn't panic and
-			// that the envVarRef regex classifies values correctly.
-			raw := &Config{}
-			if err := yaml.Unmarshal([]byte(tt.rawYAML), raw); err != nil {
-				t.Fatalf("unmarshal: %v", err)
-			}
-			isLiteral := raw.Notifications.SMTP.Password != "" && !envVarRef.MatchString(raw.Notifications.SMTP.Password)
-			if isLiteral != tt.expectWarn {
-				t.Errorf("isLiteral = %v, want %v (password = %q)", isLiteral, tt.expectWarn, raw.Notifications.SMTP.Password)
+			// Verify warnLiteralSecrets doesn't panic for any input.
+			// It only emits slog warnings so we call it directly.
+			warnLiteralSecrets(tt.rawYAML)
+		})
+	}
+}
+
+// Test envVarRef regex classification directly.
+func TestEnvVarRef(t *testing.T) {
+	tests := []struct {
+		input string
+		match bool
+	}{
+		{"${GITHUB_TOKEN}", true},
+		{"${SMTP_PASSWORD}", true},
+		{"ghp_secret123", false},
+		{"prefix_${VAR}", false}, // envVarRef matches only whole-string refs
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := envVarRef.MatchString(tt.input)
+			if got != tt.match {
+				t.Errorf("envVarRef.MatchString(%q) = %v, want %v", tt.input, got, tt.match)
 			}
 		})
 	}

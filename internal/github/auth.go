@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -46,12 +47,20 @@ func SetupAuth(ctx context.Context, pat string, log *slog.Logger) error {
 
 // ghEnv returns the current process environment with GITHUB_TOKEN set to the
 // stored PAT. This avoids mutating the global process environment.
+// #128: filters out any existing GITHUB_TOKEN to prevent duplicate entries.
 func ghEnv() []string {
 	patMu.Lock()
 	pat := storedPAT
 	patMu.Unlock()
 
-	env := os.Environ()
+	var env []string
+	for _, e := range os.Environ() {
+		// #128: remove existing GITHUB_TOKEN to avoid duplicates
+		if strings.HasPrefix(e, "GITHUB_TOKEN=") {
+			continue
+		}
+		env = append(env, e)
+	}
 	if pat != "" {
 		env = append(env, "GITHUB_TOKEN="+pat)
 	}

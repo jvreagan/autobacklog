@@ -60,12 +60,20 @@ func TestSQLiteStore_InsertAndGet(t *testing.T) {
 	}
 }
 
+// #193: helper checks Insert errors
+func insertOrFatal(t *testing.T, store *SQLiteStore, ctx context.Context, item *Item) {
+	t.Helper()
+	if err := store.Insert(ctx, item); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+}
+
 func TestSQLiteStore_Update(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
 	item := NewItem("Original", "Desc", "f.go", PriorityLow, CategoryRefactor)
-	store.Insert(ctx, item)
+	insertOrFatal(t, store, ctx, item)
 
 	item.Title = "Updated"
 	item.Status = StatusInProgress
@@ -402,6 +410,77 @@ func TestSQLiteStore_ListFilterByIssueNumber(t *testing.T) {
 	}
 }
 
+// #189: Update of a non-existent item should return an error.
+func TestSQLiteStore_Update_NonExistent(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	item := NewItem("Ghost", "desc", "f.go", PriorityHigh, CategoryBug)
+	// Don't insert — update directly
+	err := store.Update(ctx, item)
+	if err == nil {
+		t.Error("expected error when updating non-existent item")
+	}
+}
+
+// #190: Delete of a non-existent item should return an error.
+func TestSQLiteStore_Delete_NonExistent(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	err := store.Delete(ctx, "non-existent-id")
+	if err == nil {
+		t.Error("expected error when deleting non-existent item")
+	}
+}
+
+// #191: NewSQLiteStore with an invalid path should return an error.
+func TestNewSQLiteStore_InvalidPath(t *testing.T) {
+	_, err := NewSQLiteStore("/nonexistent/deeply/nested/path/test.db")
+	if err == nil {
+		t.Error("expected error for invalid DB path")
+	}
+}
+
+// #192: List with multiple combined filters.
+func TestSQLiteStore_ListCombinedFilters(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	repoURL := "https://github.com/org/repo.git"
+
+	i1 := NewItem("High Bug Pending", "", "a.go", PriorityHigh, CategoryBug)
+	i1.RepoURL = repoURL
+	insertOrFatal(t, store, ctx, i1)
+
+	i2 := NewItem("High Bug Done", "", "b.go", PriorityHigh, CategoryBug)
+	i2.Status = StatusDone
+	i2.RepoURL = repoURL
+	insertOrFatal(t, store, ctx, i2)
+
+	i3 := NewItem("Low Refactor Pending", "", "c.go", PriorityLow, CategoryRefactor)
+	i3.RepoURL = repoURL
+	insertOrFatal(t, store, ctx, i3)
+
+	// Filter: high priority + pending status + scoped to repo
+	status := StatusPending
+	pri := PriorityHigh
+	items, err := store.List(ctx, ListFilter{
+		RepoURL:  &repoURL,
+		Status:   &status,
+		Priority: &pri,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len = %d, want 1", len(items))
+	}
+	if items[0].Title != "High Bug Pending" {
+		t.Errorf("Title = %q, want 'High Bug Pending'", items[0].Title)
+	}
+}
+
 func TestSQLiteStore_MultiTenantIsolation(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -411,11 +490,11 @@ func TestSQLiteStore_MultiTenantIsolation(t *testing.T) {
 
 	itemA := NewItem("Bug in A", "desc", "a.go", PriorityHigh, CategoryBug)
 	itemA.RepoURL = repoA
-	store.Insert(ctx, itemA)
+	insertOrFatal(t, store, ctx, itemA)
 
 	itemB := NewItem("Bug in B", "desc", "b.go", PriorityHigh, CategoryBug)
 	itemB.RepoURL = repoB
-	store.Insert(ctx, itemB)
+	insertOrFatal(t, store, ctx, itemB)
 
 	// List scoped to repoA
 	itemsA, err := store.List(ctx, ListFilter{RepoURL: &repoA})

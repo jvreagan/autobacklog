@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 func TestSetup_DefaultLevel(t *testing.T) {
 	cfg := config.LoggingConfig{Level: "info", Format: "text"}
 	logger, err := Setup(cfg)
+	// #186: always cleanup to avoid leaking file handles
+	t.Cleanup(Cleanup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +57,8 @@ func TestSetup_FileOutput(t *testing.T) {
 	cfg := config.LoggingConfig{Level: "info", Format: "text", File: logFile}
 
 	logger, err := Setup(cfg)
+	// #186: always cleanup to avoid leaking file handles
+	t.Cleanup(Cleanup)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +70,51 @@ func TestSetup_FileOutput(t *testing.T) {
 	}
 	if len(content) == 0 {
 		t.Error("log file should have content")
+	}
+}
+
+// #184: test SetupWithExtraWriter
+func TestSetupWithExtraWriter(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := config.LoggingConfig{Level: "info", Format: "text"}
+
+	logger, err := SetupWithExtraWriter(cfg, &buf)
+	t.Cleanup(Cleanup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logger == nil {
+		t.Error("logger should not be nil")
+	}
+
+	logger.Info("extra writer test")
+	if buf.Len() == 0 {
+		t.Error("extra writer should have received log output")
+	}
+}
+
+// #184: test SetupWithExtraWriter with file output
+func TestSetupWithExtraWriter_WithFile(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "test.log")
+	var buf bytes.Buffer
+	cfg := config.LoggingConfig{Level: "info", Format: "text", File: logFile}
+
+	logger, err := SetupWithExtraWriter(cfg, &buf)
+	t.Cleanup(Cleanup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Info("file and extra writer test")
+
+	content, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) == 0 {
+		t.Error("log file should have content")
+	}
+	if buf.Len() == 0 {
+		t.Error("extra writer should have received output")
 	}
 }
 

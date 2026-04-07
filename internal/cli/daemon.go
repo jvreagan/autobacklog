@@ -83,12 +83,18 @@ func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.Ap
 	}
 }
 
+// isQuietHours checks whether the current time falls within quiet hours.
 func isQuietHours(start, end string) bool {
+	return isQuietHoursAt(start, end, time.Now())
+}
+
+// isQuietHoursAt checks whether t falls within the quiet hours window.
+// #156: extracted to accept a time.Time parameter so tests use the same logic.
+func isQuietHoursAt(start, end string, t time.Time) bool {
 	if start == "" || end == "" {
 		return false
 	}
 
-	now := time.Now()
 	startTime, err := time.Parse("15:04", start)
 	if err != nil {
 		return false
@@ -98,7 +104,7 @@ func isQuietHours(start, end string) bool {
 		return false
 	}
 
-	currentMinutes := now.Hour()*60 + now.Minute()
+	currentMinutes := t.Hour()*60 + t.Minute()
 	startMinutes := startTime.Hour()*60 + startTime.Minute()
 	endMinutes := endTime.Hour()*60 + endTime.Minute()
 

@@ -37,8 +37,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Scope by repo URL when a config file is available.
 	filter := backlog.ListFilter{}
-	if cfg, err := config.Load(cfgFile); err == nil && cfg.Repo.URL != "" {
-		filter.RepoURL = &cfg.Repo.URL
+	if cfgFile != "" {
+		cfg, cfgErr := config.Load(cfgFile)
+		if cfgErr != nil {
+			// #159: warn instead of silently ignoring config parse errors
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to parse config %s: %v\n", cfgFile, cfgErr)
+		} else if cfg.Repo.URL != "" {
+			filter.RepoURL = &cfg.Repo.URL
+		}
 	}
 
 	items, err := store.List(ctx, filter)

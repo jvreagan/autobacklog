@@ -3,11 +3,38 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"time"
+
+	"github.com/jamesreagan/autobacklog/internal/claude"
 )
+
+// allowedTestCommands is the set of commands that auto-detection may produce.
+// Any detected command not in this list is rejected (#122).
+var allowedTestCommands = map[string]bool{
+	"go":      true,
+	"npm":     true,
+	"npx":     true,
+	"yarn":    true,
+	"pnpm":    true,
+	"pytest":  true,
+	"python":  true,
+	"python3": true,
+	"mvn":     true,
+	"gradle":  true,
+	"gradlew": true,
+	"cargo":   true,
+	"make":    true,
+	"dotnet":  true,
+	"mix":     true,
+	"bundle":  true,
+	"rake":    true,
+	"bun":     true,
+}
 
 // Result holds the outcome of a test run.
 type Result struct {
@@ -27,7 +54,21 @@ func NewRunner(log *slog.Logger, timeout time.Duration) *Runner {
 	return &Runner{log: log, timeout: timeout}
 }
 
+// ValidateCommand checks that a test command is in the allowlist (#122).
+func ValidateCommand(command string) error {
+	base := command
+	if i := strings.LastIndex(command, "/"); i >= 0 {
+		base = command[i+1:]
+	}
+	if !allowedTestCommands[base] {
+		return fmt.Errorf("test command %q is not in the allowed list", command)
+	}
+	return nil
+}
+
 // Run executes the given test command and returns the result.
+// Returns a non-nil error for infrastructure failures (e.g. missing binary)
+// as distinct from test failures (#196).
 func (r *Runner) Run(ctx context.Context, workDir, command string, args []string) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
@@ -38,15 +79,16 @@ func (r *Runner) Run(ctx context.Context, workDir, command string, args []string
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = workDir
 
-	// Cap combined output at 50 MB to prevent OOM on verbose test suites.
+	// Use shared LimitedWriter (#197). Cap combined output at 50 MB.
 	const maxTestOutput = 50 * 1024 * 1024
-	combined := &limitedBuffer{limit: maxTestOutput}
+	var buf bytes.Buffer
+	combined := &claude.LimitedWriter{W: &buf, Limit: maxTestOutput}
 	cmd.Stdout = combined
 	cmd.Stderr = combined
 
 	err := cmd.Run()
 	elapsed := time.Since(start)
-	output := combined.String()
+	output := buf.String()
 
 	if ctx.Err() != nil {
 		return &Result{
@@ -57,6 +99,11 @@ func (r *Runner) Run(ctx context.Context, workDir, command string, args []string
 	}
 
 	if err != nil {
+		// #196: distinguish missing binary from test failure
+		var execErr *exec.Error
+		if errors.As(err, &execErr) {
+			return nil, fmt.Errorf("test binary not found: %w", err)
+		}
 		r.log.Warn("tests failed", "elapsed", elapsed, "error", err)
 		return &Result{
 			Passed:  false,
@@ -71,34 +118,4 @@ func (r *Runner) Run(ctx context.Context, workDir, command string, args []string
 		Output:  output,
 		Elapsed: elapsed,
 	}, nil
-}
-
-// limitedBuffer is a bytes.Buffer that silently discards writes beyond the limit.
-type limitedBuffer struct {
-	buf     bytes.Buffer
-	limit   int
-	written int
-}
-
-func (lb *limitedBuffer) Write(p []byte) (int, error) {
-	remaining := lb.limit - lb.written
-	if remaining <= 0 {
-		return len(p), nil
-	}
-	originalLen := len(p)
-	if len(p) > remaining {
-		p = p[:remaining]
-	}
-	n, err := lb.buf.Write(p)
-	lb.written += n
-	if err != nil {
-		return n, err
-	}
-	// Return the original length to satisfy the io.Writer contract:
-	// n == len(p) when err == nil. Excess bytes are intentionally discarded.
-	return originalLen, nil
-}
-
-func (lb *limitedBuffer) String() string {
-	return lb.buf.String()
 }

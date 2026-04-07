@@ -274,13 +274,15 @@ func newTestApp(t *testing.T, opts ...func(*App)) *App {
 }
 
 func reviewJSON(items ...[2]string) string {
-	// items are [title, priority] pairs
+	// #217: items are [title, priority] pairs — escape special JSON characters.
 	s := `[`
 	for i, pair := range items {
 		if i > 0 {
 			s += ","
 		}
-		s += fmt.Sprintf(`{"title":"%s","description":"desc","file_path":"f.go","priority":"%s","category":"bug"}`, pair[0], pair[1])
+		title := strings.NewReplacer(`"`, `\"`, `\`, `\\`).Replace(pair[0])
+		priority := strings.NewReplacer(`"`, `\"`, `\`, `\\`).Replace(pair[1])
+		s += fmt.Sprintf(`{"title":"%s","description":"desc","file_path":"f.go","priority":"%s","category":"bug"}`, title, priority)
 	}
 	s += `]`
 	return s
@@ -2165,5 +2167,56 @@ func TestRecoverStuckItems(t *testing.T) {
 	}
 	if got.Status != backlog.StatusPending {
 		t.Errorf("status = %q, want %q", got.Status, backlog.StatusPending)
+	}
+}
+
+// #183: RunBurndown with cancelled context should return promptly.
+func TestRunBurndown_CancelledContext(t *testing.T) {
+	a := newTestApp(t)
+	repo := a.repo.(*mockRepo)
+	ai := a.claude.(*mockAIClient)
+	_ = repo
+	_ = ai
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	stats, err := a.RunBurndown(ctx)
+	if err != nil && !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("RunBurndown: unexpected error: %v", err)
+	}
+	// Should return quickly with either nil stats or empty stats
+	if stats != nil && len(stats.Items) > 0 {
+		t.Errorf("expected no items processed with cancelled context, got %d", len(stats.Items))
+	}
+}
+
+// #182: implementItem cleanup on StageAll error.
+func TestImplementItem_StageAllFailure(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+	repo := a.repo.(*mockRepo)
+	ai := a.claude.(*mockAIClient)
+
+	ai.runPrintOutputs = []string{"changes applied"}
+	repo.hasChangesVal = true
+	repo.stageAllErr = fmt.Errorf("stage failed")
+
+	item := backlog.NewItem("Bug fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	err := a.implementItem(ctx, item, stats)
+	if err == nil {
+		t.Error("expected error from implementItem with StageAll failure")
+	}
+
+	// Item should be reset to pending
+	got, _ := a.store.Get(ctx, item.ID)
+	if got.Status != backlog.StatusPending {
+		t.Errorf("item status = %q, want pending after StageAll failure", got.Status)
 	}
 }

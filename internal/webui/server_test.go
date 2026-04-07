@@ -26,8 +26,8 @@ func freePort(t *testing.T) int {
 }
 
 func TestPortInUse(t *testing.T) {
-	// Occupy a port
-	ln, err := net.Listen("tcp", ":0")
+	// Occupy a port on the same interface the server will bind to
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

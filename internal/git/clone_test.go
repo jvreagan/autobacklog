@@ -301,6 +301,128 @@ func TestCheckoutBranch(t *testing.T) {
 	}
 }
 
+// #169: test DeleteBranch.
+func TestDeleteBranch(t *testing.T) {
+	bare := initBareRepo(t)
+	workDir := filepath.Join(t.TempDir(), "clone-target")
+	r := NewRepo(bare, "main", workDir, "", slog.Default())
+
+	ctx := context.Background()
+	if err := r.CloneOrPull(ctx); err != nil {
+		t.Fatalf("CloneOrPull: %v", err)
+	}
+
+	branchName, err := r.CreateBranch(ctx, "autobacklog", "feat", "Delete Test")
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	// Switch back to main before deleting
+	if err := r.CheckoutBranch(ctx, "main"); err != nil {
+		t.Fatalf("CheckoutBranch: %v", err)
+	}
+
+	if err := r.DeleteBranch(ctx, branchName); err != nil {
+		t.Fatalf("DeleteBranch: %v", err)
+	}
+
+	// Verify branch no longer exists
+	cmd := exec.Command("git", "branch", "--list", branchName)
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --list: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		t.Errorf("branch %q should not exist after deletion", branchName)
+	}
+}
+
+// #169: test Push (to local bare repo).
+func TestPush(t *testing.T) {
+	bare := initBareRepo(t)
+	workDir := filepath.Join(t.TempDir(), "clone-target")
+	r := NewRepo(bare, "main", workDir, "", slog.Default())
+
+	ctx := context.Background()
+	if err := r.CloneOrPull(ctx); err != nil {
+		t.Fatalf("CloneOrPull: %v", err)
+	}
+
+	branchName, err := r.CreateBranch(ctx, "autobacklog", "feat", "Push Test")
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	// Configure committer identity
+	runCmd(t, workDir, "git", "config", "user.email", "test@test.com")
+	runCmd(t, workDir, "git", "config", "user.name", "Test")
+
+	// #171: check os.WriteFile error
+	newFile := filepath.Join(workDir, "pushed.txt")
+	if err := os.WriteFile(newFile, []byte("push test\n"), 0644); err != nil {
+		t.Fatalf("writing file: %v", err)
+	}
+
+	if err := r.StageAll(ctx); err != nil {
+		t.Fatalf("StageAll: %v", err)
+	}
+	if err := r.Commit(ctx, "add pushed file"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := r.Push(ctx, branchName); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	// Verify the branch exists on the bare remote by listing refs directly
+	cmd := exec.Command("git", "show-ref", "--verify", "refs/heads/"+branchName)
+	cmd.Dir = bare
+	if err := cmd.Run(); err != nil {
+		t.Errorf("remote branch %q should exist after push", branchName)
+	}
+}
+
+// #169: test RevertToClean.
+func TestRevertToClean(t *testing.T) {
+	bare := initBareRepo(t)
+	workDir := filepath.Join(t.TempDir(), "clone-target")
+	r := NewRepo(bare, "main", workDir, "", slog.Default())
+
+	ctx := context.Background()
+	if err := r.CloneOrPull(ctx); err != nil {
+		t.Fatalf("CloneOrPull: %v", err)
+	}
+
+	// Configure committer identity
+	runCmd(t, workDir, "git", "config", "user.email", "test@test.com")
+	runCmd(t, workDir, "git", "config", "user.name", "Test")
+
+	// Add a tracked file
+	if err := os.WriteFile(filepath.Join(workDir, "tracked.txt"), []byte("tracked\n"), 0644); err != nil {
+		t.Fatalf("writing file: %v", err)
+	}
+	if err := r.StageAll(ctx); err != nil {
+		t.Fatalf("StageAll: %v", err)
+	}
+	if err := r.Commit(ctx, "add tracked file"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Now dirty the working directory with untracked files
+	if err := os.WriteFile(filepath.Join(workDir, "untracked.txt"), []byte("dirty\n"), 0644); err != nil {
+		t.Fatalf("writing file: %v", err)
+	}
+
+	if err := r.RevertToClean(ctx); err != nil {
+		t.Fatalf("RevertToClean: %v", err)
+	}
+
+	// Untracked file should be removed
+	if _, err := os.Stat(filepath.Join(workDir, "untracked.txt")); err == nil {
+		t.Error("untracked.txt should have been removed by RevertToClean")
+	}
+}
+
 func TestStageAllAndCommit(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")

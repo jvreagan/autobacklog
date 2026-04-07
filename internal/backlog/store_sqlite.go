@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,34 +66,51 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("enabling WAL mode: %w", err)
 	}
 
+	// #208: set busy_timeout so SQLite retries internally on lock contention
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("setting busy_timeout: %w", err)
+	}
+
 	if _, err := db.Exec(createTableSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating tables: %w", err)
 	}
 
+	log := slog.Default()
+
 	// Idempotent migrations: add columns to existing databases.
 	// "already exists" errors are expected on fresh DBs; real errors are logged.
-	execMigration(db, migrateRepoURLSQL)
-	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_repo_url ON backlog_items(repo_url)`)
-	execMigration(db, `ALTER TABLE backlog_items ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0`)
-	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_issue_number ON backlog_items(issue_number)`)
+	execMigration(db, migrateRepoURLSQL, log)
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_repo_url ON backlog_items(repo_url)`, log)
+	execMigration(db, `ALTER TABLE backlog_items ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0`, log)
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_issue_number ON backlog_items(issue_number)`, log)
+	// #207: composite index for common dedup query pattern
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_repo_status ON backlog_items(repo_url, status)`, log)
 
 	return &SQLiteStore{db: db}, nil
 }
 
 // execMigration runs a migration statement, ignoring "already exists" errors.
-func execMigration(db *sql.DB, stmt string) {
+// #209: uses slog instead of fmt.Fprintf(os.Stderr, ...).
+func execMigration(db *sql.DB, stmt string, log *slog.Logger) {
 	if _, err := db.Exec(stmt); err != nil {
 		msg := err.Error()
 		if !strings.Contains(msg, "already exists") && !strings.Contains(msg, "duplicate column") {
-			// Genuine failure — log via stderr since slog isn't available here
-			fmt.Fprintf(os.Stderr, "autobacklog: migration warning: %v\n", err)
+			log.Warn("migration warning", "error", err, "statement", stmt)
 		}
 	}
 }
 
 // Insert adds a new item to the SQLite store.
+// #134: validates required fields before insertion.
 func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
+	if item.ID == "" {
+		return fmt.Errorf("inserting item: ID is required")
+	}
+	if item.Title == "" {
+		return fmt.Errorf("inserting item: title is required")
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -108,22 +126,30 @@ func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
 
 // Update modifies an existing item in the SQLite store.
 // Returns an error if the item does not exist (zero rows affected).
+// #130: now also updates repo_url so changes are not silently dropped.
+// #132: sets UpdatedAt only after successful exec to avoid side effects on error.
 func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
-	item.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE backlog_items SET title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, updated_at=?
+		`UPDATE backlog_items SET repo_url=?, title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, updated_at=?
 		 WHERE id=?`,
-		item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
+		item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
 		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink,
-		item.UpdatedAt, item.ID,
+		now, item.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating item %q: %w", item.ID, err)
 	}
-	n, _ := result.RowsAffected()
+	// #133: check RowsAffected error instead of discarding
+	n, raErr := result.RowsAffected()
+	if raErr != nil {
+		return fmt.Errorf("checking rows affected for item %q: %w", item.ID, raErr)
+	}
 	if n == 0 {
 		return fmt.Errorf("updating item %q: not found", item.ID)
 	}
+	// #132: only mutate caller's struct after confirmed success
+	item.UpdatedAt = now
 	return nil
 }
 
@@ -203,7 +229,11 @@ func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("deleting item %q: %w", id, err)
 	}
-	n, _ := result.RowsAffected()
+	// #133: check RowsAffected error instead of discarding
+	n, raErr := result.RowsAffected()
+	if raErr != nil {
+		return fmt.Errorf("checking rows affected for delete %q: %w", id, raErr)
+	}
 	if n == 0 {
 		return fmt.Errorf("deleting item %q: not found", id)
 	}

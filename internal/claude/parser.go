@@ -122,7 +122,8 @@ func extractJSON(text string) string {
 		}
 	}
 
-	return text
+	// #203: return empty string instead of raw input to avoid large error messages
+	return ""
 }
 
 // findBalanced finds the first balanced occurrence of open/close delimiters,

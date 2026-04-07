@@ -106,8 +106,9 @@ func ListIssues(ctx context.Context, workDir, label string, log *slog.Logger) ([
 		return nil, fmt.Errorf("parsing issue list JSON: %w", err)
 	}
 
+	// #173: warn when hitting the limit — pagination not implemented yet
 	if len(issues) == issueLimit {
-		log.Warn("issue list may be truncated — returned exactly the limit", "limit", issueLimit, "label", label)
+		log.Warn("issue list truncated at limit — some issues may be missing; pagination not yet supported", "limit", issueLimit, "label", label)
 	}
 
 	log.Info("listed GitHub issues", "count", len(issues), "label", label)
@@ -135,6 +136,10 @@ func parseIssueNumber(url string) (int, error) {
 	num, err := strconv.Atoi(last)
 	if err != nil {
 		return 0, fmt.Errorf("last URL segment %q is not a number: %w", last, err)
+	}
+	// #164: reject negative and zero issue numbers
+	if num <= 0 {
+		return 0, fmt.Errorf("invalid issue number: %d", num)
 	}
 	return num, nil
 }
