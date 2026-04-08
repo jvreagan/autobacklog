@@ -13,9 +13,28 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// queryable is satisfied by both *sql.DB and *sql.Tx, allowing shared CRUD
+// logic between SQLiteStore and txStore.
+type queryable interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// storeOps holds the shared CRUD implementations that work against any queryable.
+type storeOps struct {
+	q queryable
+}
+
 // SQLiteStore implements Store using SQLite.
 type SQLiteStore struct {
 	db *sql.DB
+	storeOps
+}
+
+// txStore implements Store within a transaction. Close and RunInTx are no-ops.
+type txStore struct {
+	storeOps
 }
 
 const createTableSQL = `
@@ -88,7 +107,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	// #207: composite index for common dedup query pattern
 	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_repo_status ON backlog_items(repo_url, status)`, log)
 
-	return &SQLiteStore{db: db}, nil
+	return &SQLiteStore{db: db, storeOps: storeOps{q: db}}, nil
 }
 
 // execMigration runs a migration statement, ignoring "already exists" errors.
@@ -102,16 +121,16 @@ func execMigration(db *sql.DB, stmt string, log *slog.Logger) {
 	}
 }
 
-// Insert adds a new item to the SQLite store.
+// Insert adds a new item to the store.
 // #134: validates required fields before insertion.
-func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
+func (s *storeOps) Insert(ctx context.Context, item *Item) error {
 	if item.ID == "" {
 		return fmt.Errorf("inserting item: ID is required")
 	}
 	if item.Title == "" {
 		return fmt.Errorf("inserting item: title is required")
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.q.ExecContext(ctx,
 		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
@@ -124,13 +143,13 @@ func (s *SQLiteStore) Insert(ctx context.Context, item *Item) error {
 	return nil
 }
 
-// Update modifies an existing item in the SQLite store.
+// Update modifies an existing item in the store.
 // Returns an error if the item does not exist (zero rows affected).
 // #130: now also updates repo_url so changes are not silently dropped.
 // #132: sets UpdatedAt only after successful exec to avoid side effects on error.
-func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
+func (s *storeOps) Update(ctx context.Context, item *Item) error {
 	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx,
+	result, err := s.q.ExecContext(ctx,
 		`UPDATE backlog_items SET repo_url=?, title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, updated_at=?
 		 WHERE id=?`,
 		item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
@@ -153,9 +172,9 @@ func (s *SQLiteStore) Update(ctx context.Context, item *Item) error {
 	return nil
 }
 
-// Get retrieves an item by ID from the SQLite store.
-func (s *SQLiteStore) Get(ctx context.Context, id string) (*Item, error) {
-	row := s.db.QueryRowContext(ctx,
+// Get retrieves an item by ID from the store.
+func (s *storeOps) Get(ctx context.Context, id string) (*Item, error) {
+	row := s.q.QueryRowContext(ctx,
 		`SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at
 		 FROM backlog_items WHERE id=?`, id)
 	item, err := scanRow(row)
@@ -165,8 +184,8 @@ func (s *SQLiteStore) Get(ctx context.Context, id string) (*Item, error) {
 	return item, nil
 }
 
-// List returns items matching the given filter from the SQLite store.
-func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, error) {
+// List returns items matching the given filter from the store.
+func (s *storeOps) List(ctx context.Context, filter ListFilter) ([]*Item, error) {
 	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at FROM backlog_items WHERE 1=1`
 	args := []any{}
 
@@ -205,7 +224,7 @@ func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, err
 		args = append(args, filter.Limit)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing items: %w", err)
 	}
@@ -222,10 +241,10 @@ func (s *SQLiteStore) List(ctx context.Context, filter ListFilter) ([]*Item, err
 	return items, rows.Err()
 }
 
-// Delete removes an item by ID from the SQLite store.
+// Delete removes an item by ID from the store.
 // Returns an error if the item does not exist (zero rows affected).
-func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM backlog_items WHERE id=?`, id)
+func (s *storeOps) Delete(ctx context.Context, id string) error {
+	result, err := s.q.ExecContext(ctx, `DELETE FROM backlog_items WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting item %q: %w", id, err)
 	}
@@ -241,9 +260,9 @@ func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 }
 
 // DeleteStale removes items in terminal status older than the given number of days.
-func (s *SQLiteStore) DeleteStale(ctx context.Context, repoURL string, days int) (int, error) {
+func (s *storeOps) DeleteStale(ctx context.Context, repoURL string, days int) (int, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
-	result, err := s.db.ExecContext(ctx,
+	result, err := s.q.ExecContext(ctx,
 		`DELETE FROM backlog_items WHERE repo_url=? AND status IN ('done', 'failed', 'skipped') AND updated_at < ?`, repoURL, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("deleting stale items: %w", err)
@@ -252,9 +271,41 @@ func (s *SQLiteStore) DeleteStale(ctx context.Context, repoURL string, days int)
 	return int(n), nil
 }
 
+// RunInTx executes fn inside a database transaction. If fn returns an error
+// the transaction is rolled back; otherwise it is committed.
+func (s *SQLiteStore) RunInTx(ctx context.Context, fn func(tx Store) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+
+	txS := &txStore{storeOps: storeOps{q: tx}}
+	if err := fn(txS); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return fmt.Errorf("rollback after error (%w): %w", err, rbErr)
+		}
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing transaction: %w", err)
+	}
+	return nil
+}
+
+// RunInTx on a txStore is a no-op passthrough (nested transactions not supported).
+func (s *txStore) RunInTx(_ context.Context, fn func(tx Store) error) error {
+	return fn(s)
+}
+
 // Close closes the underlying database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+// Close on a txStore is a no-op.
+func (s *txStore) Close() error {
+	return nil
 }
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.

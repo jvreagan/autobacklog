@@ -19,6 +19,8 @@ func NewManager(store Store, log *slog.Logger) *Manager {
 }
 
 // Ingest takes a slice of new items, deduplicates against existing items for the given repo, and inserts new ones.
+// All inserts are performed atomically within a transaction — if any insert
+// fails, the entire batch is rolled back.
 // Returns the number of new items inserted.
 func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) (int, error) {
 	// Only fetch active (non-terminal) items for deduplication — avoids a full
@@ -38,7 +40,8 @@ func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) 
 		seen[dedupKey{strings.ToLower(strings.TrimSpace(ex.Title)), ex.FilePath}] = true
 	}
 
-	inserted := 0
+	// Filter to items that need inserting (dedup pass).
+	var toInsert []*Item
 	for _, item := range newItems {
 		// #187: skip nil items to prevent panics
 		if item == nil {
@@ -58,16 +61,33 @@ func (m *Manager) Ingest(ctx context.Context, repoURL string, newItems []*Item) 
 			continue
 		}
 
-		if err := m.store.Insert(ctx, item); err != nil {
-			return inserted, err
-		}
+		toInsert = append(toInsert, item)
 		seen[key] = true
 		active = append(active, item)
-		inserted++
+	}
+
+	if len(toInsert) == 0 {
+		return 0, nil
+	}
+
+	// Insert all new items atomically within a transaction.
+	err = m.store.RunInTx(ctx, func(tx Store) error {
+		for _, item := range toInsert {
+			if err := tx.Insert(ctx, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	for _, item := range toInsert {
 		m.log.Info("ingested backlog item", "title", item.Title, "priority", item.Priority, "category", item.Category)
 	}
 
-	return inserted, nil
+	return len(toInsert), nil
 }
 
 // isFuzzyDuplicate checks if item is similar to any existing item via substring containment.

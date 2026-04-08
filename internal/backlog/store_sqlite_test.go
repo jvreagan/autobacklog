@@ -2,7 +2,9 @@ package backlog
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -544,5 +546,120 @@ func TestSQLiteStore_MultiTenantIsolation(t *testing.T) {
 	_, err = store.Get(ctx, itemB.ID)
 	if err != nil {
 		t.Error("repoB item should still exist after repoA stale cleanup")
+	}
+}
+
+func TestSQLiteStore_RunInTx_Commit(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	item1 := NewItem("Tx Item 1", "desc", "a.go", PriorityHigh, CategoryBug)
+	item2 := NewItem("Tx Item 2", "desc", "b.go", PriorityLow, CategoryRefactor)
+
+	err := store.RunInTx(ctx, func(tx Store) error {
+		if err := tx.Insert(ctx, item1); err != nil {
+			return err
+		}
+		return tx.Insert(ctx, item2)
+	})
+	if err != nil {
+		t.Fatalf("RunInTx: %v", err)
+	}
+
+	// Both items should be visible after commit.
+	got1, err := store.Get(ctx, item1.ID)
+	if err != nil {
+		t.Fatalf("Get item1 after commit: %v", err)
+	}
+	if got1.Title != "Tx Item 1" {
+		t.Errorf("Title = %q, want 'Tx Item 1'", got1.Title)
+	}
+
+	got2, err := store.Get(ctx, item2.ID)
+	if err != nil {
+		t.Fatalf("Get item2 after commit: %v", err)
+	}
+	if got2.Title != "Tx Item 2" {
+		t.Errorf("Title = %q, want 'Tx Item 2'", got2.Title)
+	}
+}
+
+func TestSQLiteStore_RunInTx_Rollback(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	item1 := NewItem("Will Rollback 1", "desc", "a.go", PriorityHigh, CategoryBug)
+	item2 := NewItem("Will Rollback 2", "desc", "b.go", PriorityLow, CategoryRefactor)
+
+	err := store.RunInTx(ctx, func(tx Store) error {
+		if err := tx.Insert(ctx, item1); err != nil {
+			return err
+		}
+		if err := tx.Insert(ctx, item2); err != nil {
+			return err
+		}
+		return fmt.Errorf("simulated failure")
+	})
+	if err == nil {
+		t.Fatal("expected error from RunInTx")
+	}
+	if !strings.Contains(err.Error(), "simulated failure") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Neither item should exist after rollback.
+	_, err = store.Get(ctx, item1.ID)
+	if err == nil {
+		t.Error("item1 should not exist after rollback")
+	}
+	_, err = store.Get(ctx, item2.ID)
+	if err == nil {
+		t.Error("item2 should not exist after rollback")
+	}
+}
+
+func TestSQLiteStore_RunInTx_AtomicIngestFailure(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Pre-insert an item so we can trigger a duplicate ID error inside the tx.
+	existing := NewItem("Existing", "desc", "x.go", PriorityMedium, CategoryRefactor)
+	insertOrFatal(t, store, ctx, existing)
+
+	item1 := NewItem("New Item", "desc", "a.go", PriorityHigh, CategoryBug)
+
+	err := store.RunInTx(ctx, func(tx Store) error {
+		if err := tx.Insert(ctx, item1); err != nil {
+			return err
+		}
+		// Insert with duplicate ID — should fail
+		dup := &Item{
+			ID:        existing.ID,
+			Title:     "Duplicate",
+			Priority:  PriorityLow,
+			Category:  CategoryRefactor,
+			Status:    StatusPending,
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}
+		return tx.Insert(ctx, dup)
+	})
+	if err == nil {
+		t.Fatal("expected error from duplicate insert in tx")
+	}
+
+	// item1 should be rolled back because the tx failed.
+	_, err = store.Get(ctx, item1.ID)
+	if err == nil {
+		t.Error("item1 should not exist after failed tx (atomic rollback)")
+	}
+
+	// existing item should still be there.
+	got, err := store.Get(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("existing item should still exist: %v", err)
+	}
+	if got.Title != "Existing" {
+		t.Errorf("Title = %q, want 'Existing'", got.Title)
 	}
 }

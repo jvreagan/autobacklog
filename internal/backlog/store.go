@@ -3,10 +3,6 @@ package backlog
 import "context"
 
 // Store is the persistence interface for backlog items.
-//
-// Note: individual operations are not wrapped in transactions. Multi-step
-// operations (e.g., Manager.Ingest inserting multiple items) are not atomic.
-// If atomicity is needed in the future, add a RunInTx method.
 type Store interface {
 	// Insert adds a new item to the store.
 	Insert(ctx context.Context, item *Item) error
@@ -27,6 +23,11 @@ type Store interface {
 	// that are in a terminal status (done, failed, skipped),
 	// scoped to a specific repo URL.
 	DeleteStale(ctx context.Context, repoURL string, days int) (int, error)
+
+	// RunInTx executes fn inside a database transaction. If fn returns an
+	// error the transaction is rolled back; otherwise it is committed.
+	// The Store passed to fn operates within the transaction.
+	RunInTx(ctx context.Context, fn func(tx Store) error) error
 
 	// Close closes the store.
 	Close() error

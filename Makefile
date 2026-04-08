@@ -1,4 +1,4 @@
-.PHONY: build test vet lint clean install
+.PHONY: build test vet lint clean install coverage
 
 BINARY := autobacklog
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -21,5 +21,9 @@ lint: vet
 
 clean:
 	rm -f $(BINARY)
+
+coverage:
+	go test -race -coverprofile=coverage.out -covermode=atomic ./...
+	go tool cover -func=coverage.out
 
 all: clean build test vet
