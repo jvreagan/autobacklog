@@ -3,6 +3,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -65,6 +66,46 @@ func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slo
 
 	log.Info("auto-merge enabled", "pr", prURL)
 	return nil
+}
+
+// PRState represents the status of a GitHub pull request.
+type PRState string
+
+const (
+	PRStateOpen   PRState = "OPEN"
+	PRStateMerged PRState = "MERGED"
+	PRStateClosed PRState = "CLOSED"
+)
+
+// PRStatusResult holds the result of checking a PR's status.
+type PRStatusResult struct {
+	State PRState
+}
+
+// PRStatus checks the state of a PR using `gh pr view`.
+func PRStatus(ctx context.Context, workDir, prURL string, log *slog.Logger) (*PRStatusResult, error) {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "view", prURL, "--json", "state")
+	cmd.Dir = workDir
+	cmd.Env = ghEnv()
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("gh pr view %s: %w\n%s", prURL, err, stderr.String())
+	}
+
+	var result struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return nil, fmt.Errorf("parsing pr view output: %w", err)
+	}
+
+	state := PRState(strings.ToUpper(result.State))
+	log.Debug("checked PR status", "url", prURL, "state", state)
+	return &PRStatusResult{State: state}, nil
 }
 
 // FormatPRBody creates a structured PR body from the given fields.

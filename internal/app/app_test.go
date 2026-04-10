@@ -156,11 +156,14 @@ func (m *mockTestRunner) Run(_ context.Context, _, _ string, _ []string) (*runne
 }
 
 type mockPRCreator struct {
-	prURL          string
-	createPRErr    error
-	autoMergeErr   error
-	createPRCalls  int
-	autoMergeCalls int
+	prURL            string
+	createPRErr      error
+	autoMergeErr     error
+	checkPRState     gh.PRState
+	checkPRErr       error
+	createPRCalls    int
+	autoMergeCalls   int
+	checkPRCalls     int
 }
 
 func (m *mockPRCreator) CreatePR(_ context.Context, _ string, _ gh.PRRequest) (string, error) {
@@ -171,6 +174,14 @@ func (m *mockPRCreator) CreatePR(_ context.Context, _ string, _ gh.PRRequest) (s
 func (m *mockPRCreator) EnableAutoMerge(_ context.Context, _, _ string) error {
 	m.autoMergeCalls++
 	return m.autoMergeErr
+}
+
+func (m *mockPRCreator) CheckPRStatus(_ context.Context, _, _ string) (*gh.PRStatusResult, error) {
+	m.checkPRCalls++
+	if m.checkPRErr != nil {
+		return nil, m.checkPRErr
+	}
+	return &gh.PRStatusResult{State: m.checkPRState}, nil
 }
 
 type mockIssueManager struct {
@@ -2034,6 +2045,10 @@ func (p *prBodyCapture) EnableAutoMerge(ctx context.Context, workDir string, prU
 	return p.inner.EnableAutoMerge(ctx, workDir, prURL)
 }
 
+func (p *prBodyCapture) CheckPRStatus(ctx context.Context, workDir string, prURL string) (*gh.PRStatusResult, error) {
+	return p.inner.CheckPRStatus(ctx, workDir, prURL)
+}
+
 // ---------------------------------------------------------------------------
 // inferFromLabels tests (#101)
 // ---------------------------------------------------------------------------
@@ -2170,6 +2185,36 @@ func TestRecoverStuckItems(t *testing.T) {
 	}
 }
 
+func TestRecoverStuckItems_CleansStaleBranches(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+	repo := a.repo.(*mockRepo)
+
+	// Insert an in-progress item (simulating a crash)
+	item := backlog.NewItem("stuck item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusInProgress
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	a.recoverStuckItems(ctx)
+
+	// Verify DeleteBranch was called to clean up the stale branch
+	if repo.deleteBranchCalls != 1 {
+		t.Errorf("deleteBranchCalls = %d, want 1", repo.deleteBranchCalls)
+	}
+
+	// Verify item is now pending
+	got, err := a.store.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != backlog.StatusPending {
+		t.Errorf("status = %q, want %q", got.Status, backlog.StatusPending)
+	}
+}
+
 // #183: RunBurndown with cancelled context should return promptly.
 func TestRunBurndown_CancelledContext(t *testing.T) {
 	a := newTestApp(t)
@@ -2218,5 +2263,156 @@ func TestImplementItem_StageAllFailure(t *testing.T) {
 	got, _ := a.store.Get(ctx, item.ID)
 	if got.Status != backlog.StatusPending {
 		t.Errorf("item status = %q, want pending after StageAll failure", got.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation tests
+// ---------------------------------------------------------------------------
+
+func TestReconcile_ClosedPR_ResetsToPending(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+	pr := a.prCreator.(*mockPRCreator)
+	pr.checkPRState = gh.PRStateClosed
+
+	item := backlog.NewItem("closed pr item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	if err := a.doReconcile(ctx, stats); err != nil {
+		t.Fatalf("doReconcile: %v", err)
+	}
+
+	if stats.PRsReconciled != 1 {
+		t.Errorf("PRsReconciled = %d, want 1", stats.PRsReconciled)
+	}
+	if pr.checkPRCalls != 1 {
+		t.Errorf("checkPRCalls = %d, want 1", pr.checkPRCalls)
+	}
+
+	got, _ := a.store.Get(ctx, item.ID)
+	if got.Status != backlog.StatusPending {
+		t.Errorf("status = %q, want pending", got.Status)
+	}
+	if got.PRLink != "" {
+		t.Errorf("PRLink = %q, want empty", got.PRLink)
+	}
+}
+
+func TestReconcile_MergedPR_NoChange(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+	pr := a.prCreator.(*mockPRCreator)
+	pr.checkPRState = gh.PRStateMerged
+
+	item := backlog.NewItem("merged pr item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/2"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	if err := a.doReconcile(ctx, stats); err != nil {
+		t.Fatalf("doReconcile: %v", err)
+	}
+
+	if stats.PRsReconciled != 0 {
+		t.Errorf("PRsReconciled = %d, want 0", stats.PRsReconciled)
+	}
+
+	got, _ := a.store.Get(ctx, item.ID)
+	if got.Status != backlog.StatusDone {
+		t.Errorf("status = %q, want done", got.Status)
+	}
+}
+
+func TestReconcile_NoPRLink_Skipped(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+	pr := a.prCreator.(*mockPRCreator)
+
+	item := backlog.NewItem("no pr item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	// No PRLink set
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	if err := a.doReconcile(ctx, stats); err != nil {
+		t.Fatalf("doReconcile: %v", err)
+	}
+
+	if pr.checkPRCalls != 0 {
+		t.Errorf("checkPRCalls = %d, want 0 (should skip items without PRLink)", pr.checkPRCalls)
+	}
+}
+
+func TestReconcile_DryRun(t *testing.T) {
+	a := newTestApp(t, func(a *App) { a.dryRun = true })
+	ctx := context.Background()
+	pr := a.prCreator.(*mockPRCreator)
+
+	item := backlog.NewItem("dry run item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/3"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	if err := a.doReconcile(ctx, stats); err != nil {
+		t.Fatalf("doReconcile: %v", err)
+	}
+
+	if pr.checkPRCalls != 0 {
+		t.Errorf("checkPRCalls = %d, want 0 in dry-run mode", pr.checkPRCalls)
+	}
+	if stats.PRsReconciled != 0 {
+		t.Errorf("PRsReconciled = %d, want 0 in dry-run mode", stats.PRsReconciled)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent implementation tests
+// ---------------------------------------------------------------------------
+
+func TestDoImplement_ConcurrentFallback(t *testing.T) {
+	// When repo is a mockRepo (not *git.Repo), MaxConcurrent > 1 should
+	// fall back to sequential implementation.
+	a := newTestApp(t)
+	a.cfg.Backlog.MaxConcurrent = 4
+	ctx := context.Background()
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = false // skip to avoid needing full PR flow
+
+	item := backlog.NewItem("concurrent test", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	a.selectedItems = []*backlog.Item{item}
+
+	stats := &CycleStats{}
+	if err := a.doImplement(ctx, stats); err != nil {
+		t.Fatalf("doImplement: %v", err)
+	}
+
+	// Should have used sequential path (mockRepo doesn't implement WorktreeProvider)
+	if repo.createBranchCalls != 1 {
+		t.Errorf("createBranchCalls = %d, want 1 (sequential fallback)", repo.createBranchCalls)
 	}
 }

@@ -152,6 +152,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Backlog.MaxPerCycle == 0 {
 		cfg.Backlog.MaxPerCycle = DefaultMaxPerCycle
 	}
+	if cfg.Backlog.MaxConcurrent == 0 {
+		cfg.Backlog.MaxConcurrent = 1
+	}
 	if cfg.Backlog.StaleDays == 0 {
 		cfg.Backlog.StaleDays = DefaultStaleDays
 	}
@@ -251,6 +254,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Backlog.MaxPerCycle < 0 {
 		return fmt.Errorf("backlog.max_per_cycle must be non-negative, got %d", cfg.Backlog.MaxPerCycle)
+	}
+	if cfg.Backlog.MaxConcurrent < 0 {
+		return fmt.Errorf("backlog.max_concurrent must be non-negative, got %d", cfg.Backlog.MaxConcurrent)
 	}
 	if cfg.Testing.MaxRetries < 0 {
 		return fmt.Errorf("testing.max_retries must be non-negative, got %d", cfg.Testing.MaxRetries)

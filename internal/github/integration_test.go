@@ -150,3 +150,68 @@ func TestListIssues_RepoViewError(t *testing.T) {
 		t.Fatal("expected error when repo view fails")
 	}
 }
+
+func TestPRStatus_Merged(t *testing.T) {
+	binDir := testutil.StubBinDir(t)
+	testutil.WriteStubScript(t, binDir, "gh", `echo '{"state":"MERGED"}'`)
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	log := slog.Default()
+
+	result, err := PRStatus(ctx, workDir, "https://github.com/owner/repo/pull/1", log)
+	if err != nil {
+		t.Fatalf("PRStatus: %v", err)
+	}
+	if result.State != PRStateMerged {
+		t.Errorf("state = %q, want MERGED", result.State)
+	}
+}
+
+func TestPRStatus_Closed(t *testing.T) {
+	binDir := testutil.StubBinDir(t)
+	testutil.WriteStubScript(t, binDir, "gh", `echo '{"state":"CLOSED"}'`)
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	log := slog.Default()
+
+	result, err := PRStatus(ctx, workDir, "https://github.com/owner/repo/pull/2", log)
+	if err != nil {
+		t.Fatalf("PRStatus: %v", err)
+	}
+	if result.State != PRStateClosed {
+		t.Errorf("state = %q, want CLOSED", result.State)
+	}
+}
+
+func TestPRStatus_Open(t *testing.T) {
+	binDir := testutil.StubBinDir(t)
+	testutil.WriteStubScript(t, binDir, "gh", `echo '{"state":"OPEN"}'`)
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	log := slog.Default()
+
+	result, err := PRStatus(ctx, workDir, "https://github.com/owner/repo/pull/3", log)
+	if err != nil {
+		t.Fatalf("PRStatus: %v", err)
+	}
+	if result.State != PRStateOpen {
+		t.Errorf("state = %q, want OPEN", result.State)
+	}
+}
+
+func TestPRStatus_Error(t *testing.T) {
+	binDir := testutil.StubBinDir(t)
+	testutil.WriteStubScript(t, binDir, "gh", `echo "not found" >&2; exit 1`)
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	log := slog.Default()
+
+	_, err := PRStatus(ctx, workDir, "https://github.com/owner/repo/pull/999", log)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}

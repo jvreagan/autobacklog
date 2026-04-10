@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
-	"io"
-
+	"github.com/google/uuid"
 	"github.com/jamesreagan/autobacklog/internal/backlog"
 	"github.com/jamesreagan/autobacklog/internal/claude"
 	"github.com/jamesreagan/autobacklog/internal/config"
@@ -49,6 +51,10 @@ func (d *defaultPRCreator) CreatePR(ctx context.Context, workDir string, req gh.
 
 func (d *defaultPRCreator) EnableAutoMerge(ctx context.Context, workDir string, prURL string) error {
 	return gh.EnableAutoMerge(ctx, workDir, prURL, d.log)
+}
+
+func (d *defaultPRCreator) CheckPRStatus(ctx context.Context, workDir string, prURL string) (*gh.PRStatusResult, error) {
+	return gh.PRStatus(ctx, workDir, prURL, d.log)
 }
 
 // defaultIssueManager wraps the free functions in the github package.
@@ -146,6 +152,8 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		switch state {
 		case StateClone:
 			err = a.doClone(ctx)
+		case StateReconcile:
+			err = a.doReconcile(ctx, stats)
 		case StateImportIssues:
 			err = a.doImportIssues(ctx, stats)
 		case StateReview:
@@ -206,6 +214,7 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		"prs_auto_merged", stats.PRsAutoMerged,
 		"errors", len(stats.Errors),
 	)
+	stats.TotalCost = a.claude.Budget().Spent()
 	stats.BudgetSummary = a.claude.Budget().String()
 
 	if nErr := a.notifier.Send(notify.CycleCompleteNotification(
@@ -276,6 +285,7 @@ func (a *App) RunBurndown(ctx context.Context) (*CycleStats, error) {
 
 // recoverStuckItems resets any in-progress items back to pending so they can
 // be retried. Items get stuck when the process crashes mid-implementation.
+// Also cleans up stale local branches left behind by crashed implementations.
 func (a *App) recoverStuckItems(ctx context.Context) {
 	inProgress := backlog.StatusInProgress
 	stuck, err := a.store.List(ctx, backlog.ListFilter{Status: &inProgress, RepoURL: &a.cfg.Repo.URL})
@@ -289,6 +299,35 @@ func (a *App) recoverStuckItems(ctx context.Context) {
 		if err := a.store.Update(ctx, item); err != nil {
 			a.log.Error("failed to recover stuck item", "title", item.Title, "error", err)
 		}
+
+		// Clean up stale branch left behind by the crashed implementation.
+		branch := git.FormatBranchName(a.cfg.Repo.PRBranchPrefix, string(item.Category), item.Title)
+		if err := a.repo.DeleteBranch(ctx, branch); err != nil {
+			a.log.Debug("no stale branch to clean up", "branch", branch, "error", err)
+		} else {
+			a.log.Info("cleaned up stale branch", "branch", branch)
+		}
+	}
+}
+
+// recordCost persists the cost of the last Claude invocation. Errors are
+// logged as warnings since cost tracking is non-critical.
+func (a *App) recordCost(ctx context.Context, promptType, itemID string) {
+	cost := a.claude.Budget().LastCost()
+	if cost <= 0 {
+		return
+	}
+	record := &backlog.CostRecord{
+		ID:         uuid.New().String(),
+		RepoURL:    a.cfg.Repo.URL,
+		ItemID:     itemID,
+		Timestamp:  time.Now().UTC(),
+		Model:      a.cfg.Claude.Model,
+		PromptType: promptType,
+		CostTotal:  cost,
+	}
+	if err := a.store.InsertCost(ctx, record); err != nil {
+		a.log.Warn("failed to record cost", "prompt_type", promptType, "error", err)
 	}
 }
 
@@ -299,6 +338,54 @@ func (a *App) doClone(ctx context.Context) error {
 	}
 	a.log.Info("cloning or pulling repository", "url", a.cfg.Repo.URL, "branch", a.cfg.Repo.Branch, "work_dir", a.cfg.Repo.WorkDir)
 	return a.repo.CloneOrPull(ctx)
+}
+
+// doReconcile checks PRs for done items and resets closed-without-merge PRs
+// back to pending so they can be retried.
+func (a *App) doReconcile(ctx context.Context, stats *CycleStats) error {
+	doneStatus := backlog.StatusDone
+	items, err := a.store.List(ctx, backlog.ListFilter{Status: &doneStatus, RepoURL: &a.cfg.Repo.URL})
+	if err != nil {
+		return fmt.Errorf("listing done items for reconciliation: %w", err)
+	}
+
+	for _, item := range items {
+		if item.PRLink == "" {
+			continue
+		}
+
+		if a.dryRun {
+			a.log.Info("[dry-run] would check PR status", "title", item.Title, "pr", item.PRLink)
+			continue
+		}
+
+		result, err := a.prCreator.CheckPRStatus(ctx, a.repo.WorkDir(), item.PRLink)
+		if err != nil {
+			a.log.Warn("failed to check PR status, skipping", "title", item.Title, "pr", item.PRLink, "error", err)
+			continue
+		}
+
+		switch result.State {
+		case gh.PRStateMerged:
+			a.log.Debug("PR merged, no action needed", "title", item.Title, "pr", item.PRLink)
+		case gh.PRStateClosed:
+			a.log.Info("PR closed without merge, resetting to pending", "title", item.Title, "pr", item.PRLink)
+			item.Status = backlog.StatusPending
+			item.PRLink = ""
+			if err := a.store.Update(ctx, item); err != nil {
+				a.log.Error("failed to reset reconciled item", "title", item.Title, "error", err)
+				continue
+			}
+			stats.PRsReconciled++
+		case gh.PRStateOpen:
+			a.log.Debug("PR still open", "title", item.Title, "pr", item.PRLink)
+		}
+	}
+
+	if stats.PRsReconciled > 0 {
+		a.log.Info("reconciliation complete", "prs_reconciled", stats.PRsReconciled)
+	}
+	return nil
 }
 
 func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
@@ -407,6 +494,7 @@ func (a *App) doReview(ctx context.Context, stats *CycleStats) error {
 
 	a.log.Info("invoking Claude to review codebase", "model", a.cfg.Claude.Model, "budget_per_call", a.cfg.Claude.MaxBudgetPerCall)
 	output, err := a.claude.Run(ctx, a.repo.WorkDir(), claude.ReviewPrompt())
+	a.recordCost(ctx, "review", "")
 	if err != nil {
 		return fmt.Errorf("review: %w", err)
 	}
@@ -593,6 +681,16 @@ func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 		return nil
 	}
 
+	// Use concurrent path if configured and the repo supports worktrees.
+	gitRepo, isGitRepo := a.repo.(*git.Repo)
+	if a.cfg.Backlog.MaxConcurrent > 1 && isGitRepo {
+		return a.doImplementConcurrent(ctx, stats, gitRepo)
+	}
+
+	return a.doImplementSequential(ctx, stats)
+}
+
+func (a *App) doImplementSequential(ctx context.Context, stats *CycleStats) error {
 	a.log.Info("beginning implementation", "items_to_implement", len(a.selectedItems))
 	for i, item := range a.selectedItems {
 		// #126: check for context cancellation between items
@@ -617,6 +715,87 @@ func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 		}
 	}
 
+	return nil
+}
+
+func (a *App) doImplementConcurrent(ctx context.Context, stats *CycleStats, gitRepo *git.Repo) error {
+	maxWorkers := a.cfg.Backlog.MaxConcurrent
+	items := a.selectedItems
+	a.log.Info("beginning concurrent implementation", "items", len(items), "max_concurrent", maxWorkers)
+
+	var (
+		wg  sync.WaitGroup
+		mu  sync.Mutex
+		sem = make(chan struct{}, maxWorkers)
+	)
+
+	for i, item := range items {
+		if ctx.Err() != nil {
+			break
+		}
+
+		wg.Add(1)
+		sem <- struct{}{} // acquire semaphore slot
+
+		go func(idx int, it *backlog.Item) {
+			defer wg.Done()
+			defer func() { <-sem }() // release semaphore slot
+
+			// Create a unique worktree for this item.
+			wtPath := fmt.Sprintf("%s-wt-%d", a.repo.WorkDir(), idx)
+
+			a.log.Info("creating worktree", "item", it.Title, "path", wtPath)
+			if err := gitRepo.AddWorktree(ctx, wtPath); err != nil {
+				a.log.Error("failed to create worktree", "item", it.Title, "error", err)
+				mu.Lock()
+				stats.Errors = append(stats.Errors, fmt.Errorf("worktree for %s: %w", it.Title, err))
+				mu.Unlock()
+				return
+			}
+			defer func() {
+				if err := gitRepo.RemoveWorktree(ctx, wtPath); err != nil {
+					a.log.Warn("failed to remove worktree", "path", wtPath, "error", err)
+				}
+			}()
+
+			// Create a separate App with a worktree-specific repo.
+			wtRepo := gitRepo.NewWorktreeRepo(wtPath)
+			wtApp := &App{
+				cfg:          a.cfg,
+				repo:         wtRepo,
+				claude:       a.claude,
+				store:        a.store,
+				manager:      a.manager,
+				runner:       a.runner,
+				prCreator:    a.prCreator,
+				issueManager: a.issueManager,
+				notifier:     a.notifier,
+				log:          a.log,
+				dryRun:       a.dryRun,
+				cachedDetect: a.cachedDetect,
+			}
+
+			a.log.Info("implementing item concurrently", "index", idx+1, "title", it.Title)
+			localStats := &CycleStats{}
+			if err := wtApp.implementItem(ctx, it, localStats); err != nil {
+				a.log.Error("failed to implement item", "title", it.Title, "error", err)
+				mu.Lock()
+				stats.Errors = append(stats.Errors, err)
+				mu.Unlock()
+			}
+
+			// Merge local stats under lock.
+			mu.Lock()
+			stats.ItemsImplemented += localStats.ItemsImplemented
+			stats.PRsCreated += localStats.PRsCreated
+			stats.PRsAutoMerged += localStats.PRsAutoMerged
+			stats.TestFailures += localStats.TestFailures
+			stats.Items = append(stats.Items, localStats.Items...)
+			mu.Unlock()
+		}(i, item)
+	}
+
+	wg.Wait()
 	return nil
 }
 
@@ -678,6 +857,7 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	a.log.Info("invoking Claude to implement changes", "title", item.Title)
 	prompt := claude.ImplementPrompt(item)
 	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "implement", item.ID)
 	if err != nil {
 		a.cleanupBranch(ctx, branchName)
 		// #124: reset status on Claude failure
@@ -879,6 +1059,7 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item, stats *
 			// Ask Claude to fix the tests
 			fixPrompt := claude.FixTestPrompt(result.Output)
 			_, err = a.claude.RunPrint(ctx, workDir, fixPrompt)
+			a.recordCost(ctx, "fix_test", item.ID)
 			if err != nil {
 				return "", fmt.Errorf("claude fix attempt %d: %w", attempt, err)
 			}
@@ -918,6 +1099,7 @@ func (a *App) doDocument(ctx context.Context, stats *CycleStats) error {
 		return nil
 	}
 	_, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "document", "")
 	if err != nil {
 		a.log.Warn("documentation update failed", "error", err)
 		// Non-fatal

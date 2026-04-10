@@ -10,6 +10,7 @@ type Budget struct {
 	mu          sync.Mutex
 	maxTotal    float64
 	spent       float64
+	lastCost    float64
 	invocations int
 }
 
@@ -38,7 +39,15 @@ func (b *Budget) Record(amount float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spent += amount
+	b.lastCost = amount
 	b.invocations++
+}
+
+// LastCost returns the cost of the most recent invocation.
+func (b *Budget) LastCost() float64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastCost
 }
 
 // Remaining returns the remaining budget.

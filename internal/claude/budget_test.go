@@ -82,3 +82,27 @@ func TestBudget_String(t *testing.T) {
 		t.Errorf("String() = %q, should contain invocation count", s)
 	}
 }
+
+func TestBudget_LastCost(t *testing.T) {
+	b := NewBudget(100.0)
+
+	if b.LastCost() != 0 {
+		t.Errorf("LastCost() = %f, want 0 before any recording", b.LastCost())
+	}
+
+	b.Record(5.0)
+	if b.LastCost() != 5.0 {
+		t.Errorf("LastCost() = %f, want 5.0", b.LastCost())
+	}
+
+	b.Record(3.0)
+	if b.LastCost() != 3.0 {
+		t.Errorf("LastCost() = %f, want 3.0 (should be most recent)", b.LastCost())
+	}
+
+	// Negative amounts are ignored, LastCost should not change
+	b.Record(-1.0)
+	if b.LastCost() != 3.0 {
+		t.Errorf("LastCost() = %f, want 3.0 (negative should be ignored)", b.LastCost())
+	}
+}

@@ -102,8 +102,17 @@ func setup() (*setupResult, error) {
 	go func() {
 		select {
 		case <-sigCh:
-			log.Info("received shutdown signal")
+			log.Info("received shutdown signal, finishing current operation...")
 			cancel()
+		case <-ctx.Done():
+			signal.Stop(sigCh)
+			return
+		}
+		// Wait for a second signal → force quit
+		select {
+		case <-sigCh:
+			log.Warn("received second signal, forcing exit")
+			os.Exit(1)
 		case <-ctx.Done():
 		}
 		signal.Stop(sigCh)
@@ -188,6 +197,7 @@ func sanitizeConfig(cfg *config.Config) map[string]any {
 			"medium_threshold": cfg.Backlog.MediumThreshold,
 			"low_threshold":    cfg.Backlog.LowThreshold,
 			"max_per_cycle":    cfg.Backlog.MaxPerCycle,
+			"max_concurrent":   cfg.Backlog.MaxConcurrent,
 			"stale_days":       cfg.Backlog.StaleDays,
 		},
 		"mode":        cfg.Mode,

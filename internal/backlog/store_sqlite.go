@@ -107,6 +107,18 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	// #207: composite index for common dedup query pattern
 	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_repo_status ON backlog_items(repo_url, status)`, log)
 
+	// Cost analytics table
+	execMigration(db, `CREATE TABLE IF NOT EXISTS cost_records (
+		id          TEXT PRIMARY KEY,
+		repo_url    TEXT NOT NULL,
+		item_id     TEXT NOT NULL DEFAULT '',
+		timestamp   DATETIME NOT NULL,
+		model       TEXT NOT NULL DEFAULT '',
+		prompt_type TEXT NOT NULL DEFAULT '',
+		cost_total  REAL NOT NULL DEFAULT 0
+	)`, log)
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_cost_repo_time ON cost_records(repo_url, timestamp)`, log)
+
 	return &SQLiteStore{db: db, storeOps: storeOps{q: db}}, nil
 }
 
@@ -269,6 +281,40 @@ func (s *storeOps) DeleteStale(ctx context.Context, repoURL string, days int) (i
 	}
 	n, _ := result.RowsAffected()
 	return int(n), nil
+}
+
+// InsertCost records a cost entry.
+func (s *storeOps) InsertCost(ctx context.Context, record *CostRecord) error {
+	_, err := s.q.ExecContext(ctx,
+		`INSERT INTO cost_records (id, repo_url, item_id, timestamp, model, prompt_type, cost_total)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		record.ID, record.RepoURL, record.ItemID, record.Timestamp, record.Model, record.PromptType, record.CostTotal,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting cost record: %w", err)
+	}
+	return nil
+}
+
+// ListCosts returns cost records for the given repo since the given time.
+func (s *storeOps) ListCosts(ctx context.Context, repoURL string, since time.Time) ([]*CostRecord, error) {
+	rows, err := s.q.QueryContext(ctx,
+		`SELECT id, repo_url, item_id, timestamp, model, prompt_type, cost_total
+		 FROM cost_records WHERE repo_url=? AND timestamp >= ? ORDER BY timestamp ASC`, repoURL, since)
+	if err != nil {
+		return nil, fmt.Errorf("listing cost records: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*CostRecord
+	for rows.Next() {
+		r := &CostRecord{}
+		if err := rows.Scan(&r.ID, &r.RepoURL, &r.ItemID, &r.Timestamp, &r.Model, &r.PromptType, &r.CostTotal); err != nil {
+			return nil, fmt.Errorf("scanning cost record: %w", err)
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
 }
 
 // RunInTx executes fn inside a database transaction. If fn returns an error

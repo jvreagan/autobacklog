@@ -395,3 +395,55 @@ func TestResolveGitHubPAT(t *testing.T) {
 		}
 	})
 }
+
+func TestMaxConcurrent_Default(t *testing.T) {
+	cfgYAML := `
+repo:
+  url: https://github.com/test/repo.git
+`
+	path := filepath.Join(t.TempDir(), "test.yaml")
+	os.WriteFile(path, []byte(cfgYAML), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backlog.MaxConcurrent != 1 {
+		t.Errorf("MaxConcurrent = %d, want 1 (default)", cfg.Backlog.MaxConcurrent)
+	}
+}
+
+func TestMaxConcurrent_Validation(t *testing.T) {
+	cfgYAML := `
+repo:
+  url: https://github.com/test/repo.git
+backlog:
+  max_concurrent: -1
+`
+	path := filepath.Join(t.TempDir(), "test.yaml")
+	os.WriteFile(path, []byte(cfgYAML), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for negative max_concurrent")
+	}
+}
+
+func TestMaxConcurrent_Explicit(t *testing.T) {
+	cfgYAML := `
+repo:
+  url: https://github.com/test/repo.git
+backlog:
+  max_concurrent: 4
+`
+	path := filepath.Join(t.TempDir(), "test.yaml")
+	os.WriteFile(path, []byte(cfgYAML), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backlog.MaxConcurrent != 4 {
+		t.Errorf("MaxConcurrent = %d, want 4", cfg.Backlog.MaxConcurrent)
+	}
+}

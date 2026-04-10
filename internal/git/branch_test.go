@@ -42,9 +42,9 @@ func TestFormatBranchName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatBranchName(tt.prefix, tt.category, tt.title)
+			got := FormatBranchName(tt.prefix, tt.category, tt.title)
 			if got != tt.want {
-				t.Errorf("formatBranchName(%q, %q, %q) = %q, want %q",
+				t.Errorf("FormatBranchName(%q, %q, %q) = %q, want %q",
 					tt.prefix, tt.category, tt.title, got, tt.want)
 			}
 		})
@@ -53,7 +53,7 @@ func TestFormatBranchName(t *testing.T) {
 
 func TestFormatBranchName_NoTrailingHyphen(t *testing.T) {
 	// A title that, when truncated at 50 chars, might leave a trailing hyphen
-	got := formatBranchName("ab", "x", "abcdefghij-abcdefghij-abcdefghij-abcdefghij-abcde-ghij")
+	got := FormatBranchName("ab", "x", "abcdefghij-abcdefghij-abcdefghij-abcdefghij-abcde-ghij")
 	if got[len(got)-1] == '-' {
 		t.Errorf("branch name should not end with hyphen: %q", got)
 	}

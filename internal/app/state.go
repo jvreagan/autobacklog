@@ -10,6 +10,7 @@ type State int
 
 const (
 	StateClone State = iota
+	StateReconcile
 	StateImportIssues
 	StateReview
 	StateIngest
@@ -26,6 +27,8 @@ func (s State) String() string {
 	switch s {
 	case StateClone:
 		return "CLONE"
+	case StateReconcile:
+		return "RECONCILE"
 	case StateImportIssues:
 		return "IMPORT_ISSUES"
 	case StateReview:
@@ -54,6 +57,8 @@ func (s State) Description() string {
 	switch s {
 	case StateClone:
 		return "cloning or pulling the target repository"
+	case StateReconcile:
+		return "reconciling PR statuses for done items"
 	case StateImportIssues:
 		return "importing labeled GitHub issues"
 	case StateReview:
@@ -102,7 +107,9 @@ type CycleStats struct {
 	IssuesCreated    int
 	PRsCreated       int
 	PRsAutoMerged    int
+	PRsReconciled    int
 	TestFailures     int
+	TotalCost        float64
 	Errors           []error
 	Items            []ItemResult
 	BudgetSummary    string
@@ -120,7 +127,9 @@ func (s *CycleStats) Merge(other *CycleStats) {
 	s.IssuesCreated += other.IssuesCreated
 	s.PRsCreated += other.PRsCreated
 	s.PRsAutoMerged += other.PRsAutoMerged
+	s.PRsReconciled += other.PRsReconciled
 	s.TestFailures += other.TestFailures
+	s.TotalCost += other.TotalCost
 	s.Errors = append(s.Errors, other.Errors...)
 	s.Items = append(s.Items, other.Items...)
 	// #216: accumulate budget summaries instead of overwriting
@@ -186,6 +195,13 @@ func (s *CycleStats) Summary() string {
 			noun = "issue"
 		}
 		parts = append(parts, fmt.Sprintf("%d %s created", s.IssuesCreated, noun))
+	}
+	if s.PRsReconciled > 0 {
+		noun := "PRs"
+		if s.PRsReconciled == 1 {
+			noun = "PR"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s reconciled", s.PRsReconciled, noun))
 	}
 
 	var b strings.Builder

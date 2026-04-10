@@ -1,6 +1,9 @@
 package backlog
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Store is the persistence interface for backlog items.
 type Store interface {
@@ -24,6 +27,12 @@ type Store interface {
 	// scoped to a specific repo URL.
 	DeleteStale(ctx context.Context, repoURL string, days int) (int, error)
 
+	// InsertCost records a cost entry for analytics.
+	InsertCost(ctx context.Context, record *CostRecord) error
+
+	// ListCosts returns cost records for the given repo within the date range.
+	ListCosts(ctx context.Context, repoURL string, since time.Time) ([]*CostRecord, error)
+
 	// RunInTx executes fn inside a database transaction. If fn returns an
 	// error the transaction is rolled back; otherwise it is committed.
 	// The Store passed to fn operates within the transaction.
@@ -31,6 +40,17 @@ type Store interface {
 
 	// Close closes the store.
 	Close() error
+}
+
+// CostRecord represents a single Claude invocation cost entry.
+type CostRecord struct {
+	ID         string    `json:"id"`
+	RepoURL    string    `json:"repo_url"`
+	ItemID     string    `json:"item_id"`
+	Timestamp  time.Time `json:"timestamp"`
+	Model      string    `json:"model"`
+	PromptType string    `json:"prompt_type"`
+	CostTotal  float64   `json:"cost_total"`
 }
 
 // ListFilter specifies criteria for listing backlog items.

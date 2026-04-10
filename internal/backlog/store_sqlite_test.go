@@ -663,3 +663,73 @@ func TestSQLiteStore_RunInTx_AtomicIngestFailure(t *testing.T) {
 		t.Errorf("Title = %q, want 'Existing'", got.Title)
 	}
 }
+
+func TestInsertCost_RoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	record := &CostRecord{
+		ID:         "cost-1",
+		RepoURL:    "https://github.com/test/repo.git",
+		ItemID:     "item-1",
+		Timestamp:  now,
+		Model:      "sonnet",
+		PromptType: "implement",
+		CostTotal:  1.50,
+	}
+
+	if err := store.InsertCost(ctx, record); err != nil {
+		t.Fatalf("InsertCost: %v", err)
+	}
+
+	records, err := store.ListCosts(ctx, "https://github.com/test/repo.git", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ListCosts: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len = %d, want 1", len(records))
+	}
+	if records[0].ID != "cost-1" {
+		t.Errorf("ID = %q, want cost-1", records[0].ID)
+	}
+	if records[0].CostTotal != 1.50 {
+		t.Errorf("CostTotal = %f, want 1.50", records[0].CostTotal)
+	}
+	if records[0].PromptType != "implement" {
+		t.Errorf("PromptType = %q, want implement", records[0].PromptType)
+	}
+}
+
+func TestListCosts_FiltersByRepoAndDate(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -60)
+
+	// Insert records for different repos and times
+	records := []*CostRecord{
+		{ID: "c1", RepoURL: "repo-a", ItemID: "", Timestamp: now, Model: "sonnet", PromptType: "review", CostTotal: 1.0},
+		{ID: "c2", RepoURL: "repo-a", ItemID: "", Timestamp: old, Model: "sonnet", PromptType: "review", CostTotal: 2.0},
+		{ID: "c3", RepoURL: "repo-b", ItemID: "", Timestamp: now, Model: "sonnet", PromptType: "review", CostTotal: 3.0},
+	}
+	for _, r := range records {
+		if err := store.InsertCost(ctx, r); err != nil {
+			t.Fatalf("InsertCost: %v", err)
+		}
+	}
+
+	// Query repo-a with 30-day window should return only c1
+	since := now.AddDate(0, 0, -30)
+	got, err := store.ListCosts(ctx, "repo-a", since)
+	if err != nil {
+		t.Fatalf("ListCosts: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (old record and other repo should be filtered)", len(got))
+	}
+	if got[0].ID != "c1" {
+		t.Errorf("ID = %q, want c1", got[0].ID)
+	}
+}

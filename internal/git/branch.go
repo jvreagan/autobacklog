@@ -13,7 +13,7 @@ var nonAlphaNum = regexp.MustCompile(`[^a-zA-Z0-9-]`)
 // locally (e.g. from a previous cycle that crashed), it is checked out and
 // reset to the base branch so implementation starts from a clean state (#127).
 func (r *Repo) CreateBranch(ctx context.Context, prefix, category, title string) (string, error) {
-	branchName := formatBranchName(prefix, category, title)
+	branchName := FormatBranchName(prefix, category, title)
 
 	exists, err := r.branchExists(ctx, branchName)
 	if err != nil {
@@ -74,9 +74,9 @@ func (r *Repo) DeleteBranch(ctx context.Context, branch string) error {
 	return r.runGit(ctx, r.workDir, "branch", "-D", "--", branch)
 }
 
-// formatBranchName creates a clean branch name from components.
+// FormatBranchName creates a clean branch name from components.
 // #163: sanitizes prefix and category in addition to title.
-func formatBranchName(prefix, category, title string) string {
+func FormatBranchName(prefix, category, title string) string {
 	sanitize := func(s string) string {
 		s = strings.ToLower(s)
 		s = nonAlphaNum.ReplaceAllString(s, "-")

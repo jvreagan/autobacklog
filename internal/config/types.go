@@ -50,6 +50,7 @@ type BacklogConfig struct {
 	MediumThreshold int `yaml:"medium_threshold"` // Min medium items to trigger batch, default 3
 	LowThreshold    int `yaml:"low_threshold"`    // Min low items to trigger batch, default 5
 	MaxPerCycle     int `yaml:"max_per_cycle"`     // Max items to implement per cycle, default 5
+	MaxConcurrent   int `yaml:"max_concurrent"`    // Max concurrent implementations (requires worktrees), default 1
 	StaleDays       int `yaml:"stale_days"`        // Days before cleaning terminal items, default 30
 }
 
