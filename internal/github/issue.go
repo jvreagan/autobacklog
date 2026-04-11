@@ -1,25 +1,22 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Issue represents a GitHub issue.
 type Issue struct {
-	Number       int          `json:"number"`
-	Title        string       `json:"title"`
-	Body         string       `json:"body"`
-	State        string       `json:"state"`
-	Labels       []IssueLabel `json:"labels"`
-	PullRequest  *struct{}    `json:"pull_request,omitempty"` // non-nil when the issue is actually a PR
+	Number      int          `json:"number"`
+	Title       string       `json:"title"`
+	Body        string       `json:"body"`
+	State       string       `json:"state"`
+	Labels      []IssueLabel `json:"labels"`
+	PullRequest *struct{}    `json:"pull_request,omitempty"` // non-nil when the issue is actually a PR
 }
 
 // IssueLabel represents a GitHub issue label.
@@ -31,18 +28,12 @@ type IssueLabel struct {
 func EnsureLabel(ctx context.Context, workDir, label string, log *slog.Logger) error {
 	log.Info("ensuring GitHub label exists", "label", label)
 
-	cmd := exec.CommandContext(ctx, "gh", "label", "create", label,
+	_, err := runGH(ctx, workDir, log, "label", "create", label,
 		"--description", "Managed by autobacklog",
 		"--color", "0E8A16",
 		"--force")
-	cmd.Dir = workDir
-	cmd.Env = ghEnv()
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("gh label create: %w\n%s", err, stderr.String())
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -56,19 +47,11 @@ func CreateIssue(ctx context.Context, workDir, title, body string, labels []stri
 		args = append(args, "--label", label)
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	cmd.Dir = workDir
-	cmd.Env = ghEnv()
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("gh issue create: %w\n%s", err, stderr.String())
+	issueURL, err := runGH(ctx, workDir, log, args...)
+	if err != nil {
+		return 0, err
 	}
 
-	issueURL := strings.TrimSpace(stdout.String())
 	num, err := parseIssueNumber(issueURL)
 	if err != nil {
 		return 0, fmt.Errorf("parsing issue URL %q: %w", issueURL, err)
@@ -79,19 +62,8 @@ func CreateIssue(ctx context.Context, workDir, title, body string, labels []stri
 }
 
 // repoNWO returns the "owner/repo" name-with-owner for the repository in workDir.
-func repoNWO(ctx context.Context, workDir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner")
-	cmd.Dir = workDir
-	cmd.Env = ghEnv()
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("gh repo view: %w\n%s", err, stderr.String())
-	}
-	return strings.TrimSpace(stdout.String()), nil
+func repoNWO(ctx context.Context, workDir string, log *slog.Logger) (string, error) {
+	return runGH(ctx, workDir, log, "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner")
 }
 
 // ListIssues lists open GitHub issues with the given label using the GitHub REST API
@@ -99,12 +71,12 @@ func repoNWO(ctx context.Context, workDir string) (string, error) {
 func ListIssues(ctx context.Context, workDir, label string, log *slog.Logger) ([]Issue, error) {
 	log.Info("listing GitHub issues", "label", label)
 
-	nwo, err := repoNWO(ctx, workDir)
+	nwo, err := repoNWO(ctx, workDir, log)
 	if err != nil {
 		return nil, fmt.Errorf("determining repo: %w", err)
 	}
 
-	output, err := ghAPIWithRetry(ctx, workDir, fmt.Sprintf(
+	output, err := ghAPIPaginate(ctx, workDir, fmt.Sprintf(
 		"/repos/%s/issues?state=open&labels=%s&per_page=100", nwo, label,
 	), log)
 	if err != nil {
@@ -129,46 +101,9 @@ func ListIssues(ctx context.Context, workDir, label string, log *slog.Logger) ([
 	return filtered, nil
 }
 
-// ghAPIWithRetry calls gh api --paginate with exponential backoff on rate-limit errors.
-func ghAPIWithRetry(ctx context.Context, workDir, endpoint string, log *slog.Logger) (string, error) {
-	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
-
-	for attempt := 0; ; attempt++ {
-		cmd := exec.CommandContext(ctx, "gh", "api", "--paginate", endpoint)
-		cmd.Dir = workDir
-		cmd.Env = ghEnv()
-
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		err := cmd.Run()
-		if err == nil {
-			return stdout.String(), nil
-		}
-
-		errMsg := stderr.String()
-		if !isRateLimited(errMsg) || attempt >= len(backoffs) {
-			return "", fmt.Errorf("gh api %s: %w\n%s", endpoint, err, errMsg)
-		}
-
-		log.Warn("rate limited by GitHub API, retrying",
-			"attempt", attempt+1, "backoff", backoffs[attempt], "endpoint", endpoint)
-
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(backoffs[attempt]):
-		}
-	}
-}
-
-// isRateLimited returns true if the error output indicates a GitHub API rate limit.
-func isRateLimited(stderr string) bool {
-	lower := strings.ToLower(stderr)
-	return strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "403") ||
-		strings.Contains(lower, "secondary rate")
+// ghAPIPaginate calls gh api --paginate. Rate-limit retry is handled by runGH.
+func ghAPIPaginate(ctx context.Context, workDir, endpoint string, log *slog.Logger) (string, error) {
+	return runGH(ctx, workDir, log, "api", "--paginate", endpoint)
 }
 
 // parsePagedJSON merges the concatenated JSON arrays produced by gh api --paginate.

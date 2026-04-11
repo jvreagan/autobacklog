@@ -107,24 +107,3 @@ func TestParsePagedJSON_FiltersPullRequests(t *testing.T) {
 	}
 }
 
-func TestIsRateLimited(t *testing.T) {
-	tests := []struct {
-		name   string
-		stderr string
-		want   bool
-	}{
-		{"rate limit", "API rate limit exceeded", true},
-		{"403 error", "HTTP 403: forbidden", true},
-		{"secondary rate", "You have exceeded a secondary rate limit", true},
-		{"normal error", "HTTP 404: Not Found", false},
-		{"empty", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isRateLimited(tt.stderr)
-			if got != tt.want {
-				t.Errorf("isRateLimited(%q) = %v, want %v", tt.stderr, got, tt.want)
-			}
-		})
-	}
-}

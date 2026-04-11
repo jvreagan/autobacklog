@@ -1,12 +1,10 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 )
 
@@ -23,27 +21,17 @@ type PRRequest struct {
 func CreatePR(ctx context.Context, workDir string, req PRRequest, log *slog.Logger) (string, error) {
 	log.Info("creating pull request", "title", req.Title, "base", req.BaseBranch, "head", req.HeadBranch)
 
-	args := []string{
+	prURL, err := runGH(ctx, workDir, log,
 		"pr", "create",
 		"--title", req.Title,
 		"--body", req.Body,
 		"--base", req.BaseBranch,
 		"--head", req.HeadBranch,
+	)
+	if err != nil {
+		return "", err
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	cmd.Dir = workDir
-	cmd.Env = ghEnv()
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("gh pr create: %w\n%s", err, stderr.String())
-	}
-
-	prURL := strings.TrimSpace(stdout.String())
 	log.Info("pull request created", "url", prURL)
 	return prURL, nil
 }
@@ -53,15 +41,9 @@ func CreatePR(ctx context.Context, workDir string, req PRRequest, log *slog.Logg
 func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slog.Logger) error {
 	log.Info("enabling auto-merge", "pr", prURL)
 
-	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", prURL, "--squash", "--auto", "--delete-branch")
-	cmd.Dir = workDir
-	cmd.Env = ghEnv()
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("gh pr merge --auto: %w\n%s", err, stderr.String())
+	_, err := runGH(ctx, workDir, log, "pr", "merge", prURL, "--squash", "--auto", "--delete-branch")
+	if err != nil {
+		return err
 	}
 
 	log.Info("auto-merge enabled", "pr", prURL)
@@ -84,22 +66,15 @@ type PRStatusResult struct {
 
 // PRStatus checks the state of a PR using `gh pr view`.
 func PRStatus(ctx context.Context, workDir, prURL string, log *slog.Logger) (*PRStatusResult, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", prURL, "--json", "state")
-	cmd.Dir = workDir
-	cmd.Env = ghEnv()
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("gh pr view %s: %w\n%s", prURL, err, stderr.String())
+	out, err := runGH(ctx, workDir, log, "pr", "view", prURL, "--json", "state")
+	if err != nil {
+		return nil, err
 	}
 
 	var result struct {
 		State string `json:"state"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		return nil, fmt.Errorf("parsing pr view output: %w", err)
 	}
 
