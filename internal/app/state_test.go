@@ -141,3 +141,63 @@ func TestCycleStats_Summary_BudgetIncluded(t *testing.T) {
 		t.Errorf("Summary() missing budget line\ngot:\n%s", got)
 	}
 }
+
+func TestCycleStats_Summary_GitHubAPIIncluded(t *testing.T) {
+	stats := &CycleStats{
+		Items: []ItemResult{
+			{Title: "Task A", Status: "done"},
+		},
+		PRsCreated:       1,
+		GitHubAPISummary: "12 calls, 1 retry, 0 failures",
+	}
+
+	got := stats.Summary()
+	if !strings.Contains(got, "GitHub API: 12 calls, 1 retry, 0 failures") {
+		t.Errorf("Summary() missing GitHub API line\ngot:\n%s", got)
+	}
+}
+
+func TestCycleStats_Summary_GitHubAPIOmittedWhenEmpty(t *testing.T) {
+	stats := &CycleStats{
+		Items: []ItemResult{
+			{Title: "Task A", Status: "done"},
+		},
+		PRsCreated: 1,
+	}
+
+	got := stats.Summary()
+	if strings.Contains(got, "GitHub API:") {
+		t.Errorf("Summary() should not contain GitHub API line when empty\ngot:\n%s", got)
+	}
+}
+
+func TestCycleStats_Merge_GitHubAPI(t *testing.T) {
+	a := &CycleStats{
+		GitHubAPICalls:    5,
+		GitHubAPIRetries:  1,
+		GitHubAPIFailures: 0,
+		GitHubAPISummary:  "5 calls, 1 retry, 0 failures",
+	}
+	b := &CycleStats{
+		GitHubAPICalls:    3,
+		GitHubAPIRetries:  2,
+		GitHubAPIFailures: 1,
+		GitHubAPISummary:  "3 calls, 2 retries, 1 failure",
+	}
+
+	a.Merge(b)
+
+	if a.GitHubAPICalls != 8 {
+		t.Errorf("GitHubAPICalls = %d, want 8", a.GitHubAPICalls)
+	}
+	if a.GitHubAPIRetries != 3 {
+		t.Errorf("GitHubAPIRetries = %d, want 3", a.GitHubAPIRetries)
+	}
+	if a.GitHubAPIFailures != 1 {
+		t.Errorf("GitHubAPIFailures = %d, want 1", a.GitHubAPIFailures)
+	}
+	want := "5 calls, 1 retry, 0 failures; 3 calls, 2 retries, 1 failure"
+	if a.GitHubAPISummary != want {
+		t.Errorf("GitHubAPISummary = %q, want %q", a.GitHubAPISummary, want)
+	}
+}

@@ -217,6 +217,13 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	stats.TotalCost = a.claude.Budget().Spent()
 	stats.BudgetSummary = a.claude.Budget().String()
 
+	snap := gh.Stats.Snapshot()
+	stats.GitHubAPICalls = snap.Calls
+	stats.GitHubAPIRetries = snap.Retries
+	stats.GitHubAPIFailures = snap.Failures
+	stats.GitHubAPISummary = gh.Stats.String()
+	gh.Stats.Reset()
+
 	if nErr := a.notifier.Send(notify.CycleCompleteNotification(
 		stats.ItemsFound, stats.ItemsImplemented, stats.PRsCreated,
 		stats.BudgetSummary,

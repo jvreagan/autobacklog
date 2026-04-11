@@ -33,7 +33,15 @@ func TestIsRateLimited(t *testing.T) {
 	}
 }
 
+// resetStats resets the package-level Stats singleton for test isolation.
+func resetStats(t *testing.T) {
+	t.Helper()
+	Stats.Reset()
+	t.Cleanup(func() { Stats.Reset() })
+}
+
 func TestRunGH_Success(t *testing.T) {
+	resetStats(t)
 	binDir := testutil.StubBinDir(t)
 	testutil.WriteStubScript(t, binDir, "gh", `echo "hello from gh"`)
 
@@ -48,9 +56,16 @@ func TestRunGH_Success(t *testing.T) {
 	if out != "hello from gh" {
 		t.Errorf("output = %q, want %q", out, "hello from gh")
 	}
+	if Stats.Calls() != 1 {
+		t.Errorf("Stats.Calls() = %d, want 1", Stats.Calls())
+	}
+	if Stats.Failures() != 0 {
+		t.Errorf("Stats.Failures() = %d, want 0", Stats.Failures())
+	}
 }
 
 func TestRunGH_RateLimitRetry(t *testing.T) {
+	resetStats(t)
 	binDir := testutil.StubBinDir(t)
 	// Fail with 403 twice, then succeed on the third call.
 	// Use a counter file in the working directory to track attempts.
@@ -81,9 +96,19 @@ echo "success"
 	if out != "success" {
 		t.Errorf("output = %q, want %q", out, "success")
 	}
+	if Stats.Calls() != 1 {
+		t.Errorf("Stats.Calls() = %d, want 1", Stats.Calls())
+	}
+	if Stats.Retries() != 2 {
+		t.Errorf("Stats.Retries() = %d, want 2", Stats.Retries())
+	}
+	if Stats.Failures() != 0 {
+		t.Errorf("Stats.Failures() = %d, want 0 (succeeded after retries)", Stats.Failures())
+	}
 }
 
 func TestRunGH_NonRateLimitError(t *testing.T) {
+	resetStats(t)
 	binDir := testutil.StubBinDir(t)
 	testutil.WriteStubScript(t, binDir, "gh", `echo "HTTP 404: Not Found" >&2; exit 1`)
 
@@ -98,9 +123,16 @@ func TestRunGH_NonRateLimitError(t *testing.T) {
 	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("error = %v, want to contain '404'", err)
 	}
+	if Stats.Calls() != 1 {
+		t.Errorf("Stats.Calls() = %d, want 1", Stats.Calls())
+	}
+	if Stats.Failures() != 1 {
+		t.Errorf("Stats.Failures() = %d, want 1", Stats.Failures())
+	}
 }
 
 func TestRunGH_RetriesExhausted(t *testing.T) {
+	resetStats(t)
 	binDir := testutil.StubBinDir(t)
 	testutil.WriteStubScript(t, binDir, "gh", `echo "HTTP 403: rate limit exceeded" >&2; exit 1`)
 
@@ -114,6 +146,16 @@ func TestRunGH_RetriesExhausted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rate limit") {
 		t.Errorf("error = %v, want to contain 'rate limit'", err)
+	}
+	if Stats.Calls() != 1 {
+		t.Errorf("Stats.Calls() = %d, want 1", Stats.Calls())
+	}
+	// 3 retries (backoffs[0], backoffs[1], backoffs[2]) then failure on 4th attempt
+	if Stats.Retries() != 3 {
+		t.Errorf("Stats.Retries() = %d, want 3", Stats.Retries())
+	}
+	if Stats.Failures() != 1 {
+		t.Errorf("Stats.Failures() = %d, want 1", Stats.Failures())
 	}
 }
 

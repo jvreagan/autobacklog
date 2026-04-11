@@ -109,10 +109,14 @@ type CycleStats struct {
 	PRsAutoMerged    int
 	PRsReconciled    int
 	TestFailures     int
-	TotalCost        float64
-	Errors           []error
-	Items            []ItemResult
-	BudgetSummary    string
+	TotalCost          float64
+	Errors             []error
+	Items              []ItemResult
+	BudgetSummary      string
+	GitHubAPICalls     int
+	GitHubAPIRetries   int
+	GitHubAPIFailures  int
+	GitHubAPISummary   string
 }
 
 // Merge accumulates totals from another CycleStats into the receiver.
@@ -138,6 +142,16 @@ func (s *CycleStats) Merge(other *CycleStats) {
 			s.BudgetSummary += "; " + other.BudgetSummary
 		} else {
 			s.BudgetSummary = other.BudgetSummary
+		}
+	}
+	s.GitHubAPICalls += other.GitHubAPICalls
+	s.GitHubAPIRetries += other.GitHubAPIRetries
+	s.GitHubAPIFailures += other.GitHubAPIFailures
+	if other.GitHubAPISummary != "" {
+		if s.GitHubAPISummary != "" {
+			s.GitHubAPISummary += "; " + other.GitHubAPISummary
+		} else {
+			s.GitHubAPISummary = other.GitHubAPISummary
 		}
 	}
 }
@@ -229,6 +243,10 @@ func (s *CycleStats) Summary() string {
 
 	if s.BudgetSummary != "" {
 		fmt.Fprintf(&b, "\n\nBudget: %s", s.BudgetSummary)
+	}
+
+	if s.GitHubAPISummary != "" {
+		fmt.Fprintf(&b, "\nGitHub API: %s", s.GitHubAPISummary)
 	}
 
 	return b.String()

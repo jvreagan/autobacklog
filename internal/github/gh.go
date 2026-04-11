@@ -15,6 +15,8 @@ import (
 func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string) (string, error) {
 	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 
+	Stats.RecordCall()
+
 	for attempt := 0; ; attempt++ {
 		cmd := exec.CommandContext(ctx, "gh", args...)
 		cmd.Dir = workDir
@@ -31,9 +33,11 @@ func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string
 
 		errMsg := stderr.String()
 		if !isRateLimited(errMsg) || attempt >= len(backoffs) {
+			Stats.RecordFailure()
 			return "", fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, errMsg)
 		}
 
+		Stats.RecordRetry()
 		log.Warn("rate limited by GitHub, retrying",
 			"attempt", attempt+1, "backoff", backoffs[attempt], "args", args)
 

@@ -52,7 +52,7 @@ internal/
 ├── claude/       Claude Code CLI subprocess wrapper, prompts, JSON parser, budget tracker
 ├── config/       YAML loading, env var interpolation, validation, defaults
 ├── git/          Git operations: clone, branch, commit, push
-├── github/       PR creation, auto-merge, and issue sync via gh CLI
+├── github/       PR creation, auto-merge, issue sync, and API usage tracking via gh CLI
 ├── notify/       Notifier interface, SMTP email implementation
 ├── runner/       Test framework detection, test execution
 ├── cli/          Cobra commands (run, daemon, status, init, version)
@@ -93,6 +93,24 @@ All backlog items are tagged with their `repo_url`. Every query — listing, ded
 
 ### Deduplication
 Items are deduplicated by comparing title similarity + file path against active items (pending and in-progress) in the backlog for the same repo. Terminal items (done, failed, skipped) are excluded from dedup checks so that previously resolved findings can be re-filed if they recur.
+
+### Cycle Reporting
+
+At the end of each cycle, `CycleStats` captures:
+- **Backlog metrics**: items found, inserted, implemented; issues imported/created; PRs created/auto-merged/reconciled; test failures
+- **Budget**: total cost and per-invocation tracking via `claude.Budget`
+- **GitHub API usage**: calls, retries, rate-limit hits, and failures via `github.Stats`
+
+In daemon mode, the log line includes `gh_api_calls`, `gh_api_retries`, and `gh_api_failures` alongside the existing item/PR counters. The human-readable `Summary()` appends Budget and GitHub API lines when present.
+
+### GitHub API Usage Tracking
+
+All `gh` CLI invocations go through `runGH()` which records:
+- **Calls** — every invocation increments the call counter
+- **Retries** — each rate-limit retry (with backoff) is counted
+- **Failures** — final failures after retries are exhausted
+
+Counters are stored in a thread-safe package-level singleton (`github.Stats`) and are snapshotted into `CycleStats` at cycle end, then reset for the next cycle.
 
 ### Crash Recovery
 At the start of each cycle, any items stuck in `in_progress` status (from a previous crash or kill) are automatically recovered by resetting them to `pending`.

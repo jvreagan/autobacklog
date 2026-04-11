@@ -70,6 +70,9 @@ func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.Ap
 				"items_implemented", stats.ItemsImplemented,
 				"prs_created", stats.PRsCreated,
 				"prs_auto_merged", stats.PRsAutoMerged,
+				"gh_api_calls", stats.GitHubAPICalls,
+				"gh_api_retries", stats.GitHubAPIRetries,
+				"gh_api_failures", stats.GitHubAPIFailures,
 			)
 		}
 

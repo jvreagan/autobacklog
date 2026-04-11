@@ -133,7 +133,7 @@ internal/
   claude/                         Claude Code CLI wrapper, prompts, parser
   config/                         YAML config loading with env var interpolation
   git/                            Clone, branch, commit operations
-  github/                         PR creation, auto-merge, issue sync via gh CLI
+  github/                         PR creation, auto-merge, issue sync, API usage tracking via gh CLI
   notify/                         Email notifications
   runner/                         Test framework detection and execution
   cli/                            Cobra CLI commands
