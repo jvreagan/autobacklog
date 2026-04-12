@@ -33,6 +33,7 @@ type GitHubConfig struct {
 	CreateIssues bool   `yaml:"create_issues"`  // Create GitHub issues for new backlog items
 	IssueLabel   string `yaml:"issue_label"`    // Label for importing/creating issues, default "autobacklog"
 	PRFollowUp   bool   `yaml:"pr_follow_up"`   // Auto-address PR review comments
+	MaxFollowUps int    `yaml:"max_follow_ups"` // Max PR follow-up iterations per item (0 = unlimited)
 }
 
 // ClaudeConfig configures the Claude Code CLI integration.

@@ -39,6 +39,12 @@ type Store interface {
 	// ListAPIStats returns API stats records for the given repo since the given time.
 	ListAPIStats(ctx context.Context, repoURL string, since time.Time) ([]*APIStatsRecord, error)
 
+	// InsertCycle records a cycle stats entry.
+	InsertCycle(ctx context.Context, record *CycleRecord) error
+
+	// ListCycles returns cycle records for the given repo since the given time.
+	ListCycles(ctx context.Context, repoURL string, since time.Time) ([]*CycleRecord, error)
+
 	// RunInTx executes fn inside a database transaction. If fn returns an
 	// error the transaction is rolled back; otherwise it is committed.
 	// The Store passed to fn operates within the transaction.
@@ -68,6 +74,26 @@ type APIStatsRecord struct {
 	Retries    int       `json:"retries"`
 	RateLimits int       `json:"rate_limits"`
 	Failures   int       `json:"failures"`
+}
+
+// CycleRecord represents one completed orchestrator cycle for historical analysis.
+type CycleRecord struct {
+	ID               string    `json:"id"`
+	RepoURL          string    `json:"repo_url"`
+	Timestamp        time.Time `json:"timestamp"`
+	BudgetSummary    string    `json:"budget_summary"`
+	ItemsFound       int       `json:"items_found"`
+	ItemsInserted    int       `json:"items_inserted"`
+	ItemsImplemented int       `json:"items_implemented"`
+	IssuesImported   int       `json:"issues_imported"`
+	IssuesCreated    int       `json:"issues_created"`
+	PRsCreated       int       `json:"prs_created"`
+	PRsAutoMerged    int       `json:"prs_auto_merged"`
+	PRsReconciled    int       `json:"prs_reconciled"`
+	PRsFollowedUp   int       `json:"prs_followed_up"`
+	TestFailures     int       `json:"test_failures"`
+	ErrorCount       int       `json:"error_count"`
+	TotalCost        float64   `json:"total_cost"`
 }
 
 // ListFilter specifies criteria for listing backlog items.

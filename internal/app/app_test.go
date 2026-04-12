@@ -245,7 +245,7 @@ func testConfig() *config.Config {
 			WorkDir:        "/tmp/test-repo",
 			PRBranchPrefix: "autobacklog",
 		},
-		GitHub: config.GitHubConfig{AutoMerge: false},
+		GitHub: config.GitHubConfig{AutoMerge: false, MaxFollowUps: 3},
 		Claude: config.ClaudeConfig{
 			Model:            "sonnet",
 			MaxBudgetPerCall: 5.0,
@@ -2622,6 +2622,88 @@ func TestFollowUpOnReview_Disabled(t *testing.T) {
 	}
 }
 
+func TestFollowUpOnReview_MaxReached(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.PRFollowUp = true
+	a.cfg.GitHub.MaxFollowUps = 3
+	ctx := context.Background()
+
+	reviews := []gh.PRReviewComment{
+		{Body: "Please fix", Author: "reviewer", State: "CHANGES_REQUESTED"},
+	}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.fetchReviewsResult = &gh.PRReviewsResult{Reviews: reviews, HeadBranch: "feature-branch"}
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	item.FollowUpCount = 3 // At the limit
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	a.followUpOnReview(ctx, item, stats)
+
+	ai := a.claude.(*mockAIClient)
+	if ai.runPrintCalls != 0 {
+		t.Errorf("Claude should not be invoked when follow-up limit reached, got %d calls", ai.runPrintCalls)
+	}
+	if stats.PRsFollowedUp != 0 {
+		t.Errorf("PRsFollowedUp = %d, want 0", stats.PRsFollowedUp)
+	}
+}
+
+func TestFollowUpOnReview_IncreasesCount(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.PRFollowUp = true
+	a.cfg.GitHub.MaxFollowUps = 3
+	ctx := context.Background()
+
+	reviews := []gh.PRReviewComment{
+		{Body: "Please add error handling", Author: "reviewer", State: "CHANGES_REQUESTED"},
+	}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.fetchReviewsResult = &gh.PRReviewsResult{Reviews: reviews, HeadBranch: "feature-branch"}
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = true
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"done"}
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	item.FollowUpCount = 1 // Has done 1 follow-up already
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	a.followUpOnReview(ctx, item, stats)
+
+	if ai.runPrintCalls != 1 {
+		t.Errorf("Claude should be invoked once, got %d calls", ai.runPrintCalls)
+	}
+	if stats.PRsFollowedUp != 1 {
+		t.Errorf("PRsFollowedUp = %d, want 1", stats.PRsFollowedUp)
+	}
+
+	// Verify follow-up count was incremented
+	updated, err := a.store.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.FollowUpCount != 2 {
+		t.Errorf("FollowUpCount = %d, want 2", updated.FollowUpCount)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Batch Implementation tests
 // ---------------------------------------------------------------------------
@@ -2764,7 +2846,7 @@ func TestDoImplementBatch_NoChanges(t *testing.T) {
 	}
 }
 
-func TestDoImplementBatch_TestFailure(t *testing.T) {
+func TestDoImplementBatch_TestFailure_FallsBackToSequential(t *testing.T) {
 	a := newTestApp(t)
 	a.cfg.Backlog.BatchImplement = true
 	a.cfg.Testing.OverrideCommand = "make test"
@@ -2774,16 +2856,25 @@ func TestDoImplementBatch_TestFailure(t *testing.T) {
 	repo.hasChangesVal = true
 
 	ai := a.claude.(*mockAIClient)
-	// First call: batch implement, then: fix_test x MaxRetries
-	ai.runPrintOutputs = []string{"implemented", "fix1", "fix2"}
+	// Call 1: batch implement (fails tests)
+	// Call 2: fix_test retry 1 for batch (fails)
+	// Call 3: fix_test retry 2 for batch (fails — triggers fallback)
+	// Call 4: sequential item-0 implement
+	// Call 5: sequential item-1 implement
+	ai.runPrintOutputs = []string{"batch-impl", "batch-fix1", "batch-fix2", "seq-item0", "seq-item1"}
 
 	tr := a.runner.(*mockTestRunner)
-	// All test runs fail
+	// First 3 runs fail (batch retries), next 2 pass (sequential items)
 	tr.results = []*runner.Result{
-		{Passed: false, Output: "FAIL test1"},
-		{Passed: false, Output: "FAIL test2"},
-		{Passed: false, Output: "FAIL test3"},
+		{Passed: false, Output: "FAIL batch1"},
+		{Passed: false, Output: "FAIL batch2"},
+		{Passed: false, Output: "FAIL batch3"},
+		{Passed: true, Output: "ok item-0"},
+		{Passed: true, Output: "ok item-1"},
 	}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.prURL = "https://github.com/test/repo/pull/42"
 
 	var items []*backlog.Item
 	for i := 0; i < 2; i++ {
@@ -2798,19 +2889,28 @@ func TestDoImplementBatch_TestFailure(t *testing.T) {
 
 	stats := &CycleStats{}
 	err := a.doImplement(ctx, stats)
-	if err == nil {
-		t.Fatal("expected error from test failures")
+	if err != nil {
+		t.Fatalf("doImplement should not error after sequential fallback: %v", err)
 	}
 
-	// All items should be failed
+	// Items should be done via sequential path
 	for _, item := range items {
 		got, err := a.store.Get(ctx, item.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Status != backlog.StatusFailed {
-			t.Errorf("item %s status = %s, want failed", item.Title, got.Status)
+		if got.Status != backlog.StatusDone {
+			t.Errorf("item %s status = %s, want done", item.Title, got.Status)
 		}
+	}
+
+	// Sequential path creates a branch per item
+	if repo.createBranchCalls < 2 {
+		t.Errorf("createBranchCalls = %d, want >= 2 (batch + sequential branches)", repo.createBranchCalls)
+	}
+
+	if stats.ItemsImplemented != 2 {
+		t.Errorf("ItemsImplemented = %d, want 2", stats.ItemsImplemented)
 	}
 }
 
@@ -2852,5 +2952,37 @@ func TestDoImplementBatch_BudgetExceeded(t *testing.T) {
 		if got.Status != backlog.StatusPending {
 			t.Errorf("item %s status = %s, want pending", item.Title, got.Status)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cycle persistence tests
+// ---------------------------------------------------------------------------
+
+func TestRunCycle_PersistsCycleRecord(t *testing.T) {
+	a := newTestApp(t, func(a *App) { a.dryRun = true })
+	ctx := context.Background()
+
+	stats, err := a.RunCycle(ctx)
+	if err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	_ = stats
+
+	// Verify a cycle record was persisted
+	since := time.Now().UTC().Add(-1 * time.Minute)
+	cycles, err := a.store.ListCycles(ctx, a.cfg.Repo.URL, since)
+	if err != nil {
+		t.Fatalf("ListCycles: %v", err)
+	}
+	if len(cycles) != 1 {
+		t.Fatalf("len(cycles) = %d, want 1", len(cycles))
+	}
+	c := cycles[0]
+	if c.RepoURL != a.cfg.Repo.URL {
+		t.Errorf("RepoURL = %q, want %q", c.RepoURL, a.cfg.Repo.URL)
+	}
+	if c.ID == "" {
+		t.Error("cycle record ID should not be empty")
 	}
 }

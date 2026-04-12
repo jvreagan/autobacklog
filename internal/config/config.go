@@ -33,6 +33,7 @@ const (
 	DefaultLogFormat       = "text"
 	DefaultSMTPPort        = 587
 	DefaultIssueLabel      = "autobacklog"
+	DefaultMaxFollowUps    = 3
 )
 
 var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -187,6 +188,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.GitHub.IssueLabel == "" {
 		cfg.GitHub.IssueLabel = DefaultIssueLabel
+	}
+	if cfg.GitHub.MaxFollowUps == 0 {
+		cfg.GitHub.MaxFollowUps = DefaultMaxFollowUps
 	}
 }
 

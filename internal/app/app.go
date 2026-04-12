@@ -257,6 +257,29 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 		}
 	}
 
+	// Persist cycle record for historical analysis.
+	cycleRecord := &backlog.CycleRecord{
+		ID:               uuid.New().String(),
+		RepoURL:          a.cfg.Repo.URL,
+		Timestamp:        time.Now().UTC(),
+		BudgetSummary:    stats.BudgetSummary,
+		ItemsFound:       stats.ItemsFound,
+		ItemsInserted:    stats.ItemsInserted,
+		ItemsImplemented: stats.ItemsImplemented,
+		IssuesImported:   stats.IssuesImported,
+		IssuesCreated:    stats.IssuesCreated,
+		PRsCreated:       stats.PRsCreated,
+		PRsAutoMerged:    stats.PRsAutoMerged,
+		PRsReconciled:    stats.PRsReconciled,
+		PRsFollowedUp:   stats.PRsFollowedUp,
+		TestFailures:     stats.TestFailures,
+		ErrorCount:       len(stats.Errors),
+		TotalCost:        stats.TotalCost,
+	}
+	if err := a.store.InsertCycle(ctx, cycleRecord); err != nil {
+		a.log.Warn("failed to persist cycle record", "error", err)
+	}
+
 	if nErr := a.notifier.Send(notify.CycleCompleteNotification(
 		stats.ItemsFound, stats.ItemsImplemented, stats.PRsCreated,
 		stats.BudgetSummary,
@@ -456,6 +479,11 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 		return
 	}
 
+	if a.cfg.GitHub.MaxFollowUps > 0 && item.FollowUpCount >= a.cfg.GitHub.MaxFollowUps {
+		a.log.Warn("follow-up limit reached, skipping", "title", item.Title, "follow_up_count", item.FollowUpCount, "max", a.cfg.GitHub.MaxFollowUps)
+		return
+	}
+
 	if !a.claude.Budget().CanSpend(a.cfg.Claude.MaxBudgetPerCall) {
 		a.log.Warn("budget exceeded, skipping PR follow-up", "title", item.Title)
 		return
@@ -518,8 +546,9 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 		a.log.Info("no changes needed for review feedback", "title", item.Title)
 	}
 
-	// Update hash regardless to prevent re-processing
+	// Update hash and follow-up count to prevent re-processing
 	item.LastReviewHash = hash
+	item.FollowUpCount++
 	if err := a.store.Update(ctx, item); err != nil {
 		a.log.Error("failed to update review hash", "title", item.Title, "error", err)
 	}
@@ -930,18 +959,20 @@ func (a *App) doImplementBatch(ctx context.Context, stats *CycleStats) error {
 	// Run tests with retry (use first item as context for retries)
 	testResult, err := a.runTestsWithRetry(ctx, items[0], stats)
 	if err != nil {
+		// Batch tests failed — fall back to sequential per-item implementation.
+		a.log.Warn("batch tests failed, falling back to sequential", "error", err)
 		if revertErr := a.repo.RevertToClean(ctx); revertErr != nil {
 			a.log.Error("failed to revert working directory", "error", revertErr)
 		}
 		a.cleanupBranch(ctx, branchName)
 		for _, item := range items {
-			item.Status = backlog.StatusFailed
+			item.Status = backlog.StatusPending
+			item.Attempts-- // undo the batch increment so sequential gets a fair count
 			if updateErr := a.store.Update(ctx, item); updateErr != nil {
-				a.log.Error("failed to update item status to failed", "title", item.Title, "error", updateErr)
+				a.log.Error("failed to reset item status for sequential fallback", "title", item.Title, "error", updateErr)
 			}
-			stats.Items = append(stats.Items, ItemResult{Title: item.Title, Category: string(item.Category), Status: "failed"})
 		}
-		return err
+		return a.doImplementSequential(ctx, stats)
 	}
 
 	// Stage, commit, push

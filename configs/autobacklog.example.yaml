@@ -26,6 +26,7 @@ github:
   create_issues: false                 # create GitHub issues for new backlog items
   issue_label: "autobacklog"           # label for importing/creating issues
   pr_follow_up: false                  # auto-address PR review comments
+  max_follow_ups: 3                    # max PR follow-up iterations per item
 
 # -----------------------------------------------------------------------------
 # Claude Code CLI

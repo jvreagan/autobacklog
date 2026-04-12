@@ -773,6 +773,123 @@ func TestListAPIStats_FiltersByRepoAndDate(t *testing.T) {
 	}
 }
 
+func TestInsertAndListCycles(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	rec := &CycleRecord{
+		ID:               "cy1",
+		RepoURL:          "repo-a",
+		Timestamp:        now,
+		BudgetSummary:    "$1.50 of $100.00",
+		ItemsFound:       5,
+		ItemsInserted:    3,
+		ItemsImplemented: 2,
+		IssuesImported:   1,
+		IssuesCreated:    0,
+		PRsCreated:       2,
+		PRsAutoMerged:    1,
+		PRsReconciled:    0,
+		PRsFollowedUp:   1,
+		TestFailures:     1,
+		ErrorCount:       0,
+		TotalCost:        1.50,
+	}
+	if err := store.InsertCycle(ctx, rec); err != nil {
+		t.Fatalf("InsertCycle: %v", err)
+	}
+
+	since := now.Add(-1 * time.Minute)
+	got, err := store.ListCycles(ctx, "repo-a", since)
+	if err != nil {
+		t.Fatalf("ListCycles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	g := got[0]
+	if g.ID != "cy1" {
+		t.Errorf("ID = %q, want cy1", g.ID)
+	}
+	if g.BudgetSummary != "$1.50 of $100.00" {
+		t.Errorf("BudgetSummary = %q", g.BudgetSummary)
+	}
+	if g.ItemsFound != 5 {
+		t.Errorf("ItemsFound = %d, want 5", g.ItemsFound)
+	}
+	if g.ItemsImplemented != 2 {
+		t.Errorf("ItemsImplemented = %d, want 2", g.ItemsImplemented)
+	}
+	if g.PRsCreated != 2 {
+		t.Errorf("PRsCreated = %d, want 2", g.PRsCreated)
+	}
+	if g.PRsFollowedUp != 1 {
+		t.Errorf("PRsFollowedUp = %d, want 1", g.PRsFollowedUp)
+	}
+	if g.TotalCost != 1.50 {
+		t.Errorf("TotalCost = %f, want 1.50", g.TotalCost)
+	}
+}
+
+func TestListCycles_FiltersByRepo(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	records := []*CycleRecord{
+		{ID: "cy1", RepoURL: "repo-a", Timestamp: now, ItemsFound: 1},
+		{ID: "cy2", RepoURL: "repo-b", Timestamp: now, ItemsFound: 2},
+	}
+	for _, r := range records {
+		if err := store.InsertCycle(ctx, r); err != nil {
+			t.Fatalf("InsertCycle: %v", err)
+		}
+	}
+
+	since := now.Add(-1 * time.Minute)
+	got, err := store.ListCycles(ctx, "repo-a", since)
+	if err != nil {
+		t.Fatalf("ListCycles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].ID != "cy1" {
+		t.Errorf("ID = %q, want cy1", got[0].ID)
+	}
+}
+
+func TestListCycles_FiltersBySince(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -60)
+
+	records := []*CycleRecord{
+		{ID: "cy1", RepoURL: "repo-a", Timestamp: now, ItemsFound: 1},
+		{ID: "cy2", RepoURL: "repo-a", Timestamp: old, ItemsFound: 2},
+	}
+	for _, r := range records {
+		if err := store.InsertCycle(ctx, r); err != nil {
+			t.Fatalf("InsertCycle: %v", err)
+		}
+	}
+
+	since := now.AddDate(0, 0, -30)
+	got, err := store.ListCycles(ctx, "repo-a", since)
+	if err != nil {
+		t.Fatalf("ListCycles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (old record should be filtered)", len(got))
+	}
+	if got[0].ID != "cy1" {
+		t.Errorf("ID = %q, want cy1", got[0].ID)
+	}
+}
+
 func TestListCosts_FiltersByRepoAndDate(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

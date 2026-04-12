@@ -54,6 +54,7 @@ type Item struct {
 	Attempts       int       `json:"attempts"`
 	PRLink         string    `json:"pr_link,omitempty"`
 	LastReviewHash string    `json:"last_review_hash,omitempty"`
+	FollowUpCount  int       `json:"follow_up_count"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

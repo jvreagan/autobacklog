@@ -132,6 +132,30 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	)`, log)
 	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_apistats_repo_time ON api_stats_records(repo_url, timestamp)`, log)
 
+	// follow_up_count column for PR follow-up loop protection
+	execMigration(db, `ALTER TABLE backlog_items ADD COLUMN follow_up_count INTEGER NOT NULL DEFAULT 0`, log)
+
+	// Cycle records table for persistent cycle history
+	execMigration(db, `CREATE TABLE IF NOT EXISTS cycle_records (
+		id                TEXT PRIMARY KEY,
+		repo_url          TEXT NOT NULL,
+		timestamp         DATETIME NOT NULL,
+		budget_summary    TEXT NOT NULL DEFAULT '',
+		items_found       INTEGER NOT NULL DEFAULT 0,
+		items_inserted    INTEGER NOT NULL DEFAULT 0,
+		items_implemented INTEGER NOT NULL DEFAULT 0,
+		issues_imported   INTEGER NOT NULL DEFAULT 0,
+		issues_created    INTEGER NOT NULL DEFAULT 0,
+		prs_created       INTEGER NOT NULL DEFAULT 0,
+		prs_auto_merged   INTEGER NOT NULL DEFAULT 0,
+		prs_reconciled    INTEGER NOT NULL DEFAULT 0,
+		prs_followed_up   INTEGER NOT NULL DEFAULT 0,
+		test_failures     INTEGER NOT NULL DEFAULT 0,
+		error_count       INTEGER NOT NULL DEFAULT 0,
+		total_cost        REAL NOT NULL DEFAULT 0
+	)`, log)
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_cycle_repo_time ON cycle_records(repo_url, timestamp)`, log)
+
 	return &SQLiteStore{db: db, storeOps: storeOps{q: db}}, nil
 }
 
@@ -156,10 +180,10 @@ func (s *storeOps) Insert(ctx context.Context, item *Item) error {
 		return fmt.Errorf("inserting item: title is required")
 	}
 	_, err := s.q.ExecContext(ctx,
-		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, follow_up_count, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
-		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink, item.LastReviewHash,
+		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink, item.LastReviewHash, item.FollowUpCount,
 		item.CreatedAt, item.UpdatedAt,
 	)
 	if err != nil {
@@ -175,10 +199,10 @@ func (s *storeOps) Insert(ctx context.Context, item *Item) error {
 func (s *storeOps) Update(ctx context.Context, item *Item) error {
 	now := time.Now().UTC()
 	result, err := s.q.ExecContext(ctx,
-		`UPDATE backlog_items SET repo_url=?, title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, last_review_hash=?, updated_at=?
+		`UPDATE backlog_items SET repo_url=?, title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, last_review_hash=?, follow_up_count=?, updated_at=?
 		 WHERE id=?`,
 		item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
-		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink, item.LastReviewHash,
+		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink, item.LastReviewHash, item.FollowUpCount,
 		now, item.ID,
 	)
 	if err != nil {
@@ -200,7 +224,7 @@ func (s *storeOps) Update(ctx context.Context, item *Item) error {
 // Get retrieves an item by ID from the store.
 func (s *storeOps) Get(ctx context.Context, id string) (*Item, error) {
 	row := s.q.QueryRowContext(ctx,
-		`SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, created_at, updated_at
+		`SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, follow_up_count, created_at, updated_at
 		 FROM backlog_items WHERE id=?`, id)
 	item, err := scanRow(row)
 	if err != nil {
@@ -211,7 +235,7 @@ func (s *storeOps) Get(ctx context.Context, id string) (*Item, error) {
 
 // List returns items matching the given filter from the store.
 func (s *storeOps) List(ctx context.Context, filter ListFilter) ([]*Item, error) {
-	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, created_at, updated_at FROM backlog_items WHERE 1=1`
+	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, follow_up_count, created_at, updated_at FROM backlog_items WHERE 1=1`
 	args := []any{}
 
 	if len(filter.Statuses) > 0 {
@@ -364,6 +388,48 @@ func (s *storeOps) ListAPIStats(ctx context.Context, repoURL string, since time.
 	return records, rows.Err()
 }
 
+// InsertCycle records a cycle stats entry.
+func (s *storeOps) InsertCycle(ctx context.Context, record *CycleRecord) error {
+	_, err := s.q.ExecContext(ctx,
+		`INSERT INTO cycle_records (id, repo_url, timestamp, budget_summary, items_found, items_inserted, items_implemented, issues_imported, issues_created, prs_created, prs_auto_merged, prs_reconciled, prs_followed_up, test_failures, error_count, total_cost)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID, record.RepoURL, record.Timestamp, record.BudgetSummary,
+		record.ItemsFound, record.ItemsInserted, record.ItemsImplemented,
+		record.IssuesImported, record.IssuesCreated,
+		record.PRsCreated, record.PRsAutoMerged, record.PRsReconciled, record.PRsFollowedUp,
+		record.TestFailures, record.ErrorCount, record.TotalCost,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting cycle record: %w", err)
+	}
+	return nil
+}
+
+// ListCycles returns cycle records for the given repo since the given time.
+func (s *storeOps) ListCycles(ctx context.Context, repoURL string, since time.Time) ([]*CycleRecord, error) {
+	rows, err := s.q.QueryContext(ctx,
+		`SELECT id, repo_url, timestamp, budget_summary, items_found, items_inserted, items_implemented, issues_imported, issues_created, prs_created, prs_auto_merged, prs_reconciled, prs_followed_up, test_failures, error_count, total_cost
+		 FROM cycle_records WHERE repo_url=? AND timestamp >= ? ORDER BY timestamp ASC`, repoURL, since)
+	if err != nil {
+		return nil, fmt.Errorf("listing cycle records: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*CycleRecord
+	for rows.Next() {
+		r := &CycleRecord{}
+		if err := rows.Scan(&r.ID, &r.RepoURL, &r.Timestamp, &r.BudgetSummary,
+			&r.ItemsFound, &r.ItemsInserted, &r.ItemsImplemented,
+			&r.IssuesImported, &r.IssuesCreated,
+			&r.PRsCreated, &r.PRsAutoMerged, &r.PRsReconciled, &r.PRsFollowedUp,
+			&r.TestFailures, &r.ErrorCount, &r.TotalCost); err != nil {
+			return nil, fmt.Errorf("scanning cycle record: %w", err)
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
 // RunInTx executes fn inside a database transaction. If fn returns an error
 // the transaction is rolled back; otherwise it is committed.
 func (s *SQLiteStore) RunInTx(ctx context.Context, fn func(tx Store) error) error {
@@ -411,7 +477,7 @@ func scanRow(s scanner) (*Item, error) {
 	item := &Item{}
 	err := s.Scan(
 		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber, &item.IssueNumber,
-		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink, &item.LastReviewHash,
+		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink, &item.LastReviewHash, &item.FollowUpCount,
 		&item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {
