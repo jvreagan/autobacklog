@@ -67,6 +67,47 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
 .config-item .key { color: #8b949e; }
 .config-item .val { color: #c9d1d9; margin-left: 4px; }
 
+/* Stats bar */
+#stats-section {
+  padding: 8px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+}
+#stats-section h2 {
+  font-size: 12px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+#stats-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stat-card {
+  font-size: 12px;
+  padding: 6px 12px;
+  background: #0d1117;
+  border-radius: 4px;
+  border: 1px solid #21262d;
+  text-align: center;
+  min-width: 100px;
+}
+.stat-card .stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #58a6ff;
+  display: block;
+}
+.stat-card .stat-label {
+  color: #8b949e;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
 /* Panes */
 #panes {
   display: flex;
@@ -120,6 +161,13 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
   <div id="config-grid"><span class="config-item"><span class="key">loading...</span></span></div>
 </div>
 
+<div id="stats-section">
+  <h2>Cycle Stats</h2>
+  <div id="stats-grid">
+    <span class="stat-card"><span class="stat-label">waiting for cycle...</span></span>
+  </div>
+</div>
+
 <div id="panes">
   <div class="pane">
     <div class="pane-header">App Logs</div>
@@ -138,6 +186,7 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
   const claudePane = document.getElementById('claude-pane');
   const statusEl = document.getElementById('status');
   const configGrid = document.getElementById('config-grid');
+  const statsGrid = document.getElementById('stats-grid');
 
   function classifyLevel(text) {
     const t = text.toLowerCase();
@@ -203,6 +252,33 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
     return d.innerHTML;
   }
 
+  function updateStats(data) {
+    if (!data) return;
+    statsGrid.innerHTML = '';
+    var cards = [
+      {label: 'Items Implemented', value: data.ItemsImplemented || 0},
+      {label: 'PRs Created', value: data.PRsCreated || 0},
+      {label: 'Items Found', value: data.ItemsFound || 0},
+      {label: 'GH API Calls', value: data.GitHubAPICalls || 0},
+      {label: 'Retries', value: data.GitHubAPIRetries || 0},
+      {label: 'Failures', value: data.GitHubAPIFailures || 0},
+      {label: 'Budget', value: data.BudgetSummary || '-'}
+    ];
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i];
+      var el = document.createElement('div');
+      el.className = 'stat-card';
+      el.innerHTML = '<span class="stat-value">' + esc(String(c.value)) + '</span><span class="stat-label">' + esc(c.label) + '</span>';
+      statsGrid.appendChild(el);
+    }
+  }
+
+  // Load initial stats
+  fetch('/api/stats')
+    .then(function(r) { return r.json(); })
+    .then(function(data) { updateStats(data); })
+    .catch(function() {});
+
   // SSE connection with auto-reconnect
   let reconnectDelay = 1000;
 
@@ -221,6 +297,10 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
 
     es.addEventListener('claude', function(e) {
       appendLine(claudePane, e.data, null);
+    });
+
+    es.addEventListener('stats', function(e) {
+      try { updateStats(JSON.parse(e.data)); } catch(err) {}
     });
 
     es.onerror = function() {

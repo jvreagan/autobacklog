@@ -34,6 +34,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newStatusCmd())
 	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newCostsCmd())
+	rootCmd.AddCommand(newAPIStatsCmd())
 	rootCmd.AddCommand(newVersionCmd())
 
 	return rootCmd

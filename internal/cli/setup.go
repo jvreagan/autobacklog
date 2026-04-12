@@ -51,13 +51,23 @@ func setup() (*setupResult, error) {
 	}
 
 	// Start web UI server before logging so port conflicts fail fast.
+	// orchestratorPtr is set after the orchestrator is created so the
+	// statsFn closure can reference it via deferred binding.
+	var orchestratorPtr **app.App
 	var hub *webui.Hub
 	var uiServer *webui.Server
 	if cfg.WebUI.Port > 0 {
 		hub = webui.NewHub(1000)
 		bootLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		var appRef *app.App
+		orchestratorPtr = &appRef
 		uiServer = webui.NewServer(cfg.WebUI.Port, hub, func() any {
 			return sanitizeConfig(cfg)
+		}, func() any {
+			if *orchestratorPtr == nil {
+				return nil
+			}
+			return (*orchestratorPtr).LastStats()
 		}, bootLog)
 		if err := uiServer.Start(); err != nil {
 			return nil, err
@@ -146,6 +156,11 @@ func setup() (*setupResult, error) {
 			uiServer.Shutdown(context.Background())
 		}
 		return nil, fmt.Errorf("creating orchestrator: %w", err)
+	}
+
+	// Wire up deferred orchestrator reference for the statsFn closure.
+	if orchestratorPtr != nil {
+		*orchestratorPtr = orchestrator
 	}
 
 	// Tee Claude CLI output to the web UI hub if enabled.

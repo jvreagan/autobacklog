@@ -38,6 +38,8 @@ type App struct {
 	cachedDetect     *runner.DetectResult // cached test framework per cycle
 	burndownTotal    int                  // total pending items at burndown start
 	burndownDone     int                  // items addressed so far in burndown
+	lastStats        *CycleStats          // most recent cycle stats for web UI
+	lastStatsMu      sync.Mutex
 }
 
 // defaultPRCreator wraps the free functions in the github package.
@@ -124,6 +126,18 @@ func (a *App) SetClaudeOutputWriters(stdout, stderr io.Writer) {
 	if c, ok := a.claude.(*claude.Client); ok {
 		c.SetOutputWriters(stdout, stderr)
 	}
+}
+
+// LastStats returns a copy of the most recent cycle stats, or nil if no cycle
+// has completed yet. Safe for concurrent access.
+func (a *App) LastStats() *CycleStats {
+	a.lastStatsMu.Lock()
+	defer a.lastStatsMu.Unlock()
+	if a.lastStats == nil {
+		return nil
+	}
+	cp := *a.lastStats
+	return &cp
 }
 
 // RunCycle executes one full cycle of the state machine.
@@ -224,12 +238,33 @@ func (a *App) RunCycle(ctx context.Context) (*CycleStats, error) {
 	stats.GitHubAPISummary = gh.Stats.String()
 	gh.Stats.Reset()
 
+	if snap.Calls > 0 {
+		apiRecord := &backlog.APIStatsRecord{
+			ID:         uuid.New().String(),
+			RepoURL:    a.cfg.Repo.URL,
+			Timestamp:  time.Now().UTC(),
+			Calls:      snap.Calls,
+			Retries:    snap.Retries,
+			RateLimits: snap.RateLimits,
+			Failures:   snap.Failures,
+		}
+		if err := a.store.InsertAPIStats(ctx, apiRecord); err != nil {
+			a.log.Warn("failed to record API stats", "error", err)
+		}
+	}
+
 	if nErr := a.notifier.Send(notify.CycleCompleteNotification(
 		stats.ItemsFound, stats.ItemsImplemented, stats.PRsCreated,
 		stats.BudgetSummary,
 	)); nErr != nil {
 		a.log.Warn("failed to send cycle notification", "error", nErr)
 	}
+
+	// Store latest stats for the web UI.
+	a.lastStatsMu.Lock()
+	cp := *stats
+	a.lastStats = &cp
+	a.lastStatsMu.Unlock()
 
 	return stats, nil
 }

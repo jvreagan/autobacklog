@@ -36,7 +36,7 @@ func TestPortInUse(t *testing.T) {
 
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, log)
 
 	err = srv.Start()
 	if err == nil {
@@ -52,7 +52,7 @@ func TestStartSuccess(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return map[string]string{"key": "val"} }, log)
+	srv := NewServer(port, hub, func() any { return map[string]string{"key": "val"} }, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestSSEReceivesEvents(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestSSETypeFilter(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestConfigEndpoint(t *testing.T) {
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := map[string]any{"repo": "https://example.com", "mode": "oneshot"}
-	srv := NewServer(port, hub, func() any { return cfg }, log)
+	srv := NewServer(port, hub, func() any { return cfg }, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -195,11 +195,65 @@ func TestConfigEndpoint(t *testing.T) {
 	}
 }
 
+func TestStatsEndpoint(t *testing.T) {
+	port := freePort(t)
+	hub := NewHub(100)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	stats := map[string]any{"items_implemented": 3, "prs_created": 2}
+	srv := NewServer(port, hub, func() any { return nil }, func() any { return stats }, log)
+
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown(context.Background())
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/stats", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["prs_created"] != float64(2) {
+		t.Errorf("prs_created = %v, want 2", got["prs_created"])
+	}
+}
+
+func TestStatsEndpointNil(t *testing.T) {
+	port := freePort(t)
+	hub := NewHub(100)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := NewServer(port, hub, func() any { return nil }, nil, log)
+
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown(context.Background())
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/stats", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if strings.TrimSpace(string(body)) != "null" {
+		t.Errorf("expected null body, got %q", string(body))
+	}
+}
+
 func TestStaticServing(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -222,7 +276,7 @@ func TestShutdown(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)

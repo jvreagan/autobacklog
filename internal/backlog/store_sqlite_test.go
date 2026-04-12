@@ -701,6 +701,78 @@ func TestInsertCost_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestInsertAPIStats_RoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	record := &APIStatsRecord{
+		ID:         "api-1",
+		RepoURL:    "https://github.com/test/repo.git",
+		Timestamp:  now,
+		Calls:      10,
+		Retries:    2,
+		RateLimits: 2,
+		Failures:   1,
+	}
+
+	if err := store.InsertAPIStats(ctx, record); err != nil {
+		t.Fatalf("InsertAPIStats: %v", err)
+	}
+
+	records, err := store.ListAPIStats(ctx, "https://github.com/test/repo.git", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ListAPIStats: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len = %d, want 1", len(records))
+	}
+	if records[0].ID != "api-1" {
+		t.Errorf("ID = %q, want api-1", records[0].ID)
+	}
+	if records[0].Calls != 10 {
+		t.Errorf("Calls = %d, want 10", records[0].Calls)
+	}
+	if records[0].Retries != 2 {
+		t.Errorf("Retries = %d, want 2", records[0].Retries)
+	}
+	if records[0].Failures != 1 {
+		t.Errorf("Failures = %d, want 1", records[0].Failures)
+	}
+}
+
+func TestListAPIStats_FiltersByRepoAndDate(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -60)
+
+	records := []*APIStatsRecord{
+		{ID: "a1", RepoURL: "repo-a", Timestamp: now, Calls: 5, Retries: 1, RateLimits: 1, Failures: 0},
+		{ID: "a2", RepoURL: "repo-a", Timestamp: old, Calls: 3, Retries: 0, RateLimits: 0, Failures: 0},
+		{ID: "b1", RepoURL: "repo-b", Timestamp: now, Calls: 8, Retries: 2, RateLimits: 2, Failures: 1},
+	}
+	for _, r := range records {
+		if err := store.InsertAPIStats(ctx, r); err != nil {
+			t.Fatalf("InsertAPIStats: %v", err)
+		}
+	}
+
+	// Query repo-a with 30-day window should return only a1
+	since := now.AddDate(0, 0, -30)
+	got, err := store.ListAPIStats(ctx, "repo-a", since)
+	if err != nil {
+		t.Fatalf("ListAPIStats: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].ID != "a1" {
+		t.Errorf("ID = %q, want a1", got[0].ID)
+	}
+}
+
 func TestListCosts_FiltersByRepoAndDate(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

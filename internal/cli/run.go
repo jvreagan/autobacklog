@@ -47,6 +47,7 @@ func runOnce(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cycle failed: %w", err)
 	}
 
+	broadcastStats(s.hub, stats)
 	s.log.Info(stats.Summary())
 
 	return nil

@@ -21,18 +21,21 @@ type Server struct {
 	port     int
 	hub      *Hub
 	configFn func() any
+	statsFn  func() any
 	log      *slog.Logger
 	srv      *http.Server
 	listener net.Listener
 }
 
 // NewServer creates a new web UI server. configFn returns the sanitized
-// config to expose via the /api/config endpoint.
-func NewServer(port int, hub *Hub, configFn func() any, log *slog.Logger) *Server {
+// config to expose via the /api/config endpoint. statsFn returns the latest
+// cycle stats (may be nil).
+func NewServer(port int, hub *Hub, configFn func() any, statsFn func() any, log *slog.Logger) *Server {
 	return &Server{
 		port:     port,
 		hub:      hub,
 		configFn: configFn,
+		statsFn:  statsFn,
 		log:      log,
 	}
 }
@@ -61,6 +64,9 @@ func (s *Server) Start() error {
 
 	// Config endpoint
 	mux.HandleFunc("GET /api/config", s.handleConfig)
+
+	// Stats endpoint
+	mux.HandleFunc("GET /api/stats", s.handleStats)
 
 	s.srv = &http.Server{Handler: mux}
 
@@ -141,5 +147,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(cfg); err != nil {
 		s.log.Error("failed to encode config", "error", err)
+	}
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	if s.statsFn == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("null"))
+		return
+	}
+	data := s.statsFn()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		s.log.Error("failed to encode stats", "error", err)
 	}
 }

@@ -119,6 +119,18 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	)`, log)
 	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_cost_repo_time ON cost_records(repo_url, timestamp)`, log)
 
+	// API stats table
+	execMigration(db, `CREATE TABLE IF NOT EXISTS api_stats_records (
+		id          TEXT PRIMARY KEY,
+		repo_url    TEXT NOT NULL,
+		timestamp   DATETIME NOT NULL,
+		calls       INTEGER NOT NULL DEFAULT 0,
+		retries     INTEGER NOT NULL DEFAULT 0,
+		rate_limits INTEGER NOT NULL DEFAULT 0,
+		failures    INTEGER NOT NULL DEFAULT 0
+	)`, log)
+	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_apistats_repo_time ON api_stats_records(repo_url, timestamp)`, log)
+
 	return &SQLiteStore{db: db, storeOps: storeOps{q: db}}, nil
 }
 
@@ -311,6 +323,40 @@ func (s *storeOps) ListCosts(ctx context.Context, repoURL string, since time.Tim
 		r := &CostRecord{}
 		if err := rows.Scan(&r.ID, &r.RepoURL, &r.ItemID, &r.Timestamp, &r.Model, &r.PromptType, &r.CostTotal); err != nil {
 			return nil, fmt.Errorf("scanning cost record: %w", err)
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
+// InsertAPIStats records a GitHub API usage entry.
+func (s *storeOps) InsertAPIStats(ctx context.Context, record *APIStatsRecord) error {
+	_, err := s.q.ExecContext(ctx,
+		`INSERT INTO api_stats_records (id, repo_url, timestamp, calls, retries, rate_limits, failures)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		record.ID, record.RepoURL, record.Timestamp, record.Calls, record.Retries, record.RateLimits, record.Failures,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting api stats record: %w", err)
+	}
+	return nil
+}
+
+// ListAPIStats returns API stats records for the given repo since the given time.
+func (s *storeOps) ListAPIStats(ctx context.Context, repoURL string, since time.Time) ([]*APIStatsRecord, error) {
+	rows, err := s.q.QueryContext(ctx,
+		`SELECT id, repo_url, timestamp, calls, retries, rate_limits, failures
+		 FROM api_stats_records WHERE repo_url=? AND timestamp >= ? ORDER BY timestamp ASC`, repoURL, since)
+	if err != nil {
+		return nil, fmt.Errorf("listing api stats records: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*APIStatsRecord
+	for rows.Next() {
+		r := &APIStatsRecord{}
+		if err := rows.Scan(&r.ID, &r.RepoURL, &r.Timestamp, &r.Calls, &r.Retries, &r.RateLimits, &r.Failures); err != nil {
+			return nil, fmt.Errorf("scanning api stats record: %w", err)
 		}
 		records = append(records, r)
 	}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/jamesreagan/autobacklog/internal/app"
 	"github.com/jamesreagan/autobacklog/internal/config"
 	"github.com/jamesreagan/autobacklog/internal/logging"
+	"github.com/jamesreagan/autobacklog/internal/webui"
 )
 
 func newDaemonCmd() *cobra.Command {
@@ -32,11 +34,23 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		defer s.uiServer.Shutdown(context.Background())
 	}
 
-	return runDaemonLoop(s.ctx, s.cfg, s.orchestrator, s.log)
+	return runDaemonLoop(s.ctx, s.cfg, s.orchestrator, s.hub, s.log)
+}
+
+// broadcastStats sends cycle stats to connected web UI clients.
+func broadcastStats(hub *webui.Hub, stats *app.CycleStats) {
+	if hub == nil || stats == nil {
+		return
+	}
+	data, err := json.Marshal(stats)
+	if err != nil {
+		return
+	}
+	hub.Broadcast(webui.Event{Type: webui.EventStats, Data: string(data)})
 }
 
 // runDaemonLoop is the shared loop used by both `run` (when mode=daemon) and `daemon`.
-func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.App, log *slog.Logger) error {
+func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.App, hub *webui.Hub, log *slog.Logger) error {
 	log.Info("daemon started", "interval", cfg.Daemon.Interval)
 
 	for {
@@ -75,6 +89,8 @@ func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.Ap
 				"gh_api_failures", stats.GitHubAPIFailures,
 			)
 		}
+
+		broadcastStats(hub, stats)
 
 		log.Info("sleeping until next cycle", "duration", cfg.Daemon.Interval)
 		select {

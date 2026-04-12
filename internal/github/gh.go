@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,15 +40,37 @@ func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string
 		}
 
 		Stats.RecordRetry()
+
+		backoff := backoffs[attempt]
+		if hint := parseRetryAfter(errMsg); hint > 0 && hint > backoff {
+			backoff = hint
+		}
+
 		log.Warn("rate limited by GitHub, retrying",
-			"attempt", attempt+1, "backoff", backoffs[attempt], "args", args)
+			"attempt", attempt+1, "backoff", backoff, "args", args)
 
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(backoffs[attempt]):
+		case <-time.After(backoff):
 		}
 	}
+}
+
+var retryAfterRe = regexp.MustCompile(`(?i)retry after (\d+)`)
+
+// parseRetryAfter extracts a "retry after N" hint (in seconds) from stderr.
+// Returns 0 if no hint is found.
+func parseRetryAfter(stderr string) time.Duration {
+	m := retryAfterRe.FindStringSubmatch(stderr)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
 }
 
 // isRateLimited returns true if the error output indicates a GitHub API rate limit.

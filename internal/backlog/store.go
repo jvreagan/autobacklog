@@ -33,6 +33,12 @@ type Store interface {
 	// ListCosts returns cost records for the given repo within the date range.
 	ListCosts(ctx context.Context, repoURL string, since time.Time) ([]*CostRecord, error)
 
+	// InsertAPIStats records a GitHub API usage entry.
+	InsertAPIStats(ctx context.Context, record *APIStatsRecord) error
+
+	// ListAPIStats returns API stats records for the given repo since the given time.
+	ListAPIStats(ctx context.Context, repoURL string, since time.Time) ([]*APIStatsRecord, error)
+
 	// RunInTx executes fn inside a database transaction. If fn returns an
 	// error the transaction is rolled back; otherwise it is committed.
 	// The Store passed to fn operates within the transaction.
@@ -51,6 +57,17 @@ type CostRecord struct {
 	Model      string    `json:"model"`
 	PromptType string    `json:"prompt_type"`
 	CostTotal  float64   `json:"cost_total"`
+}
+
+// APIStatsRecord represents a single GitHub API usage snapshot per cycle.
+type APIStatsRecord struct {
+	ID         string    `json:"id"`
+	RepoURL    string    `json:"repo_url"`
+	Timestamp  time.Time `json:"timestamp"`
+	Calls      int       `json:"calls"`
+	Retries    int       `json:"retries"`
+	RateLimits int       `json:"rate_limits"`
+	Failures   int       `json:"failures"`
 }
 
 // ListFilter specifies criteria for listing backlog items.

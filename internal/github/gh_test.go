@@ -7,9 +7,33 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jamesreagan/autobacklog/internal/testutil"
 )
+
+func TestParseRetryAfter(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   time.Duration
+	}{
+		{"basic", "retry after 42 seconds", 42 * time.Second},
+		{"sentence", "Please retry after 60 seconds.", 60 * time.Second},
+		{"embedded", "HTTP 403: rate limit exceeded; retry after 5", 5 * time.Second},
+		{"no match", "HTTP 403: forbidden", 0},
+		{"empty", "", 0},
+		{"case variation", "Retry After 10", 10 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseRetryAfter(tt.stderr)
+			if got != tt.want {
+				t.Errorf("parseRetryAfter(%q) = %v, want %v", tt.stderr, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestIsRateLimited(t *testing.T) {
 	tests := []struct {

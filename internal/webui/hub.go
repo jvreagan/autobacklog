@@ -8,6 +8,7 @@ type EventType string
 const (
 	EventLog    EventType = "log"
 	EventClaude EventType = "claude"
+	EventStats  EventType = "stats"
 )
 
 // Event is a single message broadcast through the hub.
