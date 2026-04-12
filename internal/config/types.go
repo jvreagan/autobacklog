@@ -27,11 +27,12 @@ type RepoConfig struct {
 
 // GitHubConfig holds GitHub authentication and integration settings.
 type GitHubConfig struct {
-	PAT          string `yaml:"pat"`           // GitHub PAT (inline)
-	PATFile      string `yaml:"pat_file"`      // Path to file containing PAT
-	AutoMerge    bool   `yaml:"auto_merge"`    // Enable auto-merge after CI passes
-	CreateIssues bool   `yaml:"create_issues"` // Create GitHub issues for new backlog items
-	IssueLabel   string `yaml:"issue_label"`   // Label for importing/creating issues, default "autobacklog"
+	PAT          string `yaml:"pat"`            // GitHub PAT (inline)
+	PATFile      string `yaml:"pat_file"`       // Path to file containing PAT
+	AutoMerge    bool   `yaml:"auto_merge"`     // Enable auto-merge after CI passes
+	CreateIssues bool   `yaml:"create_issues"`  // Create GitHub issues for new backlog items
+	IssueLabel   string `yaml:"issue_label"`    // Label for importing/creating issues, default "autobacklog"
+	PRFollowUp   bool   `yaml:"pr_follow_up"`   // Auto-address PR review comments
 }
 
 // ClaudeConfig configures the Claude Code CLI integration.
@@ -46,12 +47,13 @@ type ClaudeConfig struct {
 
 // BacklogConfig controls backlog prioritization and lifecycle.
 type BacklogConfig struct {
-	HighThreshold   int `yaml:"high_threshold"`   // Min high items to trigger implementation, default 1
-	MediumThreshold int `yaml:"medium_threshold"` // Min medium items to trigger batch, default 3
-	LowThreshold    int `yaml:"low_threshold"`    // Min low items to trigger batch, default 5
-	MaxPerCycle     int `yaml:"max_per_cycle"`     // Max items to implement per cycle, default 5
-	MaxConcurrent   int `yaml:"max_concurrent"`    // Max concurrent implementations (requires worktrees), default 1
-	StaleDays       int `yaml:"stale_days"`        // Days before cleaning terminal items, default 30
+	HighThreshold   int  `yaml:"high_threshold"`   // Min high items to trigger implementation, default 1
+	MediumThreshold int  `yaml:"medium_threshold"` // Min medium items to trigger batch, default 3
+	LowThreshold    int  `yaml:"low_threshold"`    // Min low items to trigger batch, default 5
+	MaxPerCycle     int  `yaml:"max_per_cycle"`     // Max items to implement per cycle, default 5
+	MaxConcurrent   int  `yaml:"max_concurrent"`    // Max concurrent implementations (requires worktrees), default 1
+	StaleDays       int  `yaml:"stale_days"`        // Days before cleaning terminal items, default 30
+	BatchImplement  bool `yaml:"batch_implement"`   // Implement all selected items in one Claude session
 }
 
 // TestingConfig controls test detection and execution.

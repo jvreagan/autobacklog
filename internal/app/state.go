@@ -108,6 +108,7 @@ type CycleStats struct {
 	PRsCreated       int
 	PRsAutoMerged    int
 	PRsReconciled    int
+	PRsFollowedUp   int
 	TestFailures     int
 	TotalCost          float64
 	Errors             []error
@@ -132,6 +133,7 @@ func (s *CycleStats) Merge(other *CycleStats) {
 	s.PRsCreated += other.PRsCreated
 	s.PRsAutoMerged += other.PRsAutoMerged
 	s.PRsReconciled += other.PRsReconciled
+	s.PRsFollowedUp += other.PRsFollowedUp
 	s.TestFailures += other.TestFailures
 	s.TotalCost += other.TotalCost
 	s.Errors = append(s.Errors, other.Errors...)
@@ -216,6 +218,13 @@ func (s *CycleStats) Summary() string {
 			noun = "PR"
 		}
 		parts = append(parts, fmt.Sprintf("%d %s reconciled", s.PRsReconciled, noun))
+	}
+	if s.PRsFollowedUp > 0 {
+		noun := "PRs"
+		if s.PRsFollowedUp == 1 {
+			noun = "PR"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s followed up", s.PRsFollowedUp, noun))
 	}
 
 	var b strings.Builder

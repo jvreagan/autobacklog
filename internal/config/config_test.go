@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -445,5 +446,43 @@ backlog:
 	}
 	if cfg.Backlog.MaxConcurrent != 4 {
 		t.Errorf("MaxConcurrent = %d, want 4", cfg.Backlog.MaxConcurrent)
+	}
+}
+
+func TestValidate_BatchAndConcurrentMutuallyExclusive(t *testing.T) {
+	cfg := Config{
+		Repo:       RepoConfig{URL: "https://example.com"},
+		Mode:       "oneshot",
+		HelperMode: "buildbacklog",
+		Logging:    LoggingConfig{Level: "info", Format: "text"},
+		Backlog: BacklogConfig{
+			BatchImplement: true,
+			MaxConcurrent:  2,
+		},
+	}
+
+	err := validate(&cfg)
+	if err == nil {
+		t.Fatal("expected error for batch_implement + max_concurrent > 1")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_BatchWithConcurrent1_OK(t *testing.T) {
+	cfg := Config{
+		Repo:       RepoConfig{URL: "https://example.com"},
+		Mode:       "oneshot",
+		HelperMode: "buildbacklog",
+		Logging:    LoggingConfig{Level: "info", Format: "text"},
+		Backlog: BacklogConfig{
+			BatchImplement: true,
+			MaxConcurrent:  1,
+		},
+	}
+
+	if err := validate(&cfg); err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

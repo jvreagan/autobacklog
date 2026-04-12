@@ -59,6 +59,10 @@ func (d *defaultPRCreator) CheckPRStatus(ctx context.Context, workDir string, pr
 	return gh.PRStatus(ctx, workDir, prURL, d.log)
 }
 
+func (d *defaultPRCreator) FetchPRReviews(ctx context.Context, workDir string, prURL string) (*gh.PRReviewsResult, error) {
+	return gh.FetchPRReviews(ctx, workDir, prURL, d.log)
+}
+
 // defaultIssueManager wraps the free functions in the github package.
 type defaultIssueManager struct {
 	log *slog.Logger
@@ -421,6 +425,9 @@ func (a *App) doReconcile(ctx context.Context, stats *CycleStats) error {
 			stats.PRsReconciled++
 		case gh.PRStateOpen:
 			a.log.Debug("PR still open", "title", item.Title, "pr", item.PRLink)
+			if a.cfg.GitHub.PRFollowUp && !a.dryRun {
+				a.followUpOnReview(ctx, item, stats)
+			}
 		}
 	}
 
@@ -428,6 +435,94 @@ func (a *App) doReconcile(ctx context.Context, stats *CycleStats) error {
 		a.log.Info("reconciliation complete", "prs_reconciled", stats.PRsReconciled)
 	}
 	return nil
+}
+
+// followUpOnReview addresses PR review comments by invoking Claude and pushing a follow-up commit.
+func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *CycleStats) {
+	reviews, err := a.prCreator.FetchPRReviews(ctx, a.repo.WorkDir(), item.PRLink)
+	if err != nil {
+		a.log.Warn("failed to fetch PR reviews", "title", item.Title, "error", err)
+		return
+	}
+
+	if len(reviews.Reviews) == 0 {
+		a.log.Debug("no reviews on PR", "title", item.Title)
+		return
+	}
+
+	hash := gh.ReviewsHash(reviews.Reviews)
+	if hash == item.LastReviewHash {
+		a.log.Debug("reviews already addressed", "title", item.Title, "hash", hash)
+		return
+	}
+
+	if !a.claude.Budget().CanSpend(a.cfg.Claude.MaxBudgetPerCall) {
+		a.log.Warn("budget exceeded, skipping PR follow-up", "title", item.Title)
+		return
+	}
+
+	// Checkout the PR's head branch
+	if err := a.repo.CheckoutBranch(ctx, reviews.HeadBranch); err != nil {
+		a.log.Warn("failed to checkout PR branch for follow-up", "branch", reviews.HeadBranch, "error", err)
+		return
+	}
+	defer func() {
+		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
+			a.log.Error("failed to return to base branch after follow-up", "error", coErr)
+		}
+	}()
+
+	// Build feedback text from reviews
+	var feedback strings.Builder
+	for _, r := range reviews.Reviews {
+		fmt.Fprintf(&feedback, "**%s** (%s):\n%s\n\n", r.Author, r.State, r.Body)
+	}
+
+	prompt := claude.AddressReviewPrompt(item.Title, feedback.String())
+	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "follow_up", item.ID)
+	if err != nil {
+		a.log.Warn("Claude failed to address review", "title", item.Title, "error", err)
+		// Still update hash to prevent re-processing the same reviews
+		item.LastReviewHash = hash
+		if updateErr := a.store.Update(ctx, item); updateErr != nil {
+			a.log.Error("failed to update review hash after Claude error", "error", updateErr)
+		}
+		return
+	}
+
+	// Check if Claude made changes
+	hasChanges, err := a.repo.HasChanges(ctx)
+	if err != nil {
+		a.log.Warn("failed to check for changes after follow-up", "error", err)
+		return
+	}
+
+	if hasChanges {
+		if err := a.repo.StageAll(ctx); err != nil {
+			a.log.Warn("failed to stage follow-up changes", "error", err)
+			return
+		}
+		commitMsg := fmt.Sprintf("autobacklog: address review comments for %s", item.Title)
+		if err := a.repo.Commit(ctx, commitMsg); err != nil {
+			a.log.Warn("failed to commit follow-up changes", "error", err)
+			return
+		}
+		if err := a.repo.Push(ctx, reviews.HeadBranch); err != nil {
+			a.log.Warn("failed to push follow-up changes", "error", err)
+			return
+		}
+		a.log.Info("pushed follow-up commit addressing reviews", "title", item.Title, "pr", item.PRLink)
+		stats.PRsFollowedUp++
+	} else {
+		a.log.Info("no changes needed for review feedback", "title", item.Title)
+	}
+
+	// Update hash regardless to prevent re-processing
+	item.LastReviewHash = hash
+	if err := a.store.Update(ctx, item); err != nil {
+		a.log.Error("failed to update review hash", "title", item.Title, "error", err)
+	}
 }
 
 func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
@@ -723,6 +818,11 @@ func (a *App) doImplement(ctx context.Context, stats *CycleStats) error {
 		return nil
 	}
 
+	// Use batch path if configured and multiple items selected.
+	if a.cfg.Backlog.BatchImplement && len(a.selectedItems) > 1 {
+		return a.doImplementBatch(ctx, stats)
+	}
+
 	// Use concurrent path if configured and the repo supports worktrees.
 	gitRepo, isGitRepo := a.repo.(*git.Repo)
 	if a.cfg.Backlog.MaxConcurrent > 1 && isGitRepo {
@@ -755,6 +855,185 @@ func (a *App) doImplementSequential(ctx context.Context, stats *CycleStats) erro
 			a.log.Error("failed to implement item", "title", item.Title, "error", err)
 			stats.Errors = append(stats.Errors, err)
 		}
+	}
+
+	return nil
+}
+
+func (a *App) doImplementBatch(ctx context.Context, stats *CycleStats) error {
+	items := a.selectedItems
+	a.log.Info("beginning batch implementation", "items", len(items))
+
+	// Mark all items in progress
+	for _, item := range items {
+		item.Status = backlog.StatusInProgress
+		item.Attempts++
+		if err := a.store.Update(ctx, item); err != nil {
+			return fmt.Errorf("updating item status to in_progress: %w", err)
+		}
+	}
+
+	// Budget check: need budget for all items
+	budgetNeeded := a.cfg.Claude.MaxBudgetPerCall * float64(len(items))
+	if !a.claude.Budget().CanSpend(budgetNeeded) {
+		a.log.Warn("budget exceeded for batch implementation, resetting items")
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		return fmt.Errorf("budget exceeded for batch of %d items", len(items))
+	}
+
+	// Create one branch for the batch
+	branchName, err := a.repo.CreateBranch(ctx, a.cfg.Repo.PRBranchPrefix, "batch", fmt.Sprintf("batch-%d-items", len(items)))
+	if err != nil {
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		return fmt.Errorf("creating batch branch: %w", err)
+	}
+	a.log.Info("created batch branch", "branch", branchName)
+
+	// Invoke Claude with batch prompt
+	prompt := claude.BatchImplementPrompt(items)
+	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "batch_implement", "")
+	if err != nil {
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusFailed)
+		}
+		return fmt.Errorf("claude batch implement: %w", err)
+	}
+
+	// Check for changes
+	hasChanges, err := a.repo.HasChanges(ctx)
+	if err != nil {
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		return fmt.Errorf("checking changes: %w", err)
+	}
+	if !hasChanges {
+		a.log.Warn("claude made no changes for batch")
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			item.Status = backlog.StatusSkipped
+			if updateErr := a.store.Update(ctx, item); updateErr != nil {
+				a.log.Error("failed to update item status to skipped", "title", item.Title, "error", updateErr)
+			}
+			stats.Items = append(stats.Items, ItemResult{Title: item.Title, Category: string(item.Category), Status: "skipped"})
+		}
+		return nil
+	}
+
+	// Run tests with retry (use first item as context for retries)
+	testResult, err := a.runTestsWithRetry(ctx, items[0], stats)
+	if err != nil {
+		if revertErr := a.repo.RevertToClean(ctx); revertErr != nil {
+			a.log.Error("failed to revert working directory", "error", revertErr)
+		}
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			item.Status = backlog.StatusFailed
+			if updateErr := a.store.Update(ctx, item); updateErr != nil {
+				a.log.Error("failed to update item status to failed", "title", item.Title, "error", updateErr)
+			}
+			stats.Items = append(stats.Items, ItemResult{Title: item.Title, Category: string(item.Category), Status: "failed"})
+		}
+		return err
+	}
+
+	// Stage, commit, push
+	if err := a.repo.StageAll(ctx); err != nil {
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		return fmt.Errorf("staging batch changes: %w", err)
+	}
+
+	var titles []string
+	for _, item := range items {
+		titles = append(titles, item.Title)
+	}
+	commitMsg := fmt.Sprintf("autobacklog: batch implement %d items\n\n- %s", len(items), strings.Join(titles, "\n- "))
+	if err := a.repo.Commit(ctx, commitMsg); err != nil {
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		return fmt.Errorf("committing batch: %w", err)
+	}
+
+	if err := a.repo.Push(ctx, branchName); err != nil {
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		return fmt.Errorf("pushing batch: %w", err)
+	}
+
+	// Build batch PR body
+	var batchItems []gh.BatchPRItem
+	for _, item := range items {
+		batchItems = append(batchItems, gh.BatchPRItem{
+			Title:       item.Title,
+			Description: item.Description,
+			Category:    string(item.Category),
+			Priority:    string(item.Priority),
+			IssueNumber: item.IssueNumber,
+		})
+	}
+	prBody := gh.FormatBatchPRBody(batchItems, testResult)
+	prURL, err := a.prCreator.CreatePR(ctx, a.repo.WorkDir(), gh.PRRequest{
+		Title:      fmt.Sprintf("[autobacklog] Batch: %d items", len(items)),
+		Body:       prBody,
+		BaseBranch: a.cfg.Repo.Branch,
+		HeadBranch: branchName,
+	})
+	if err != nil {
+		a.cleanupBranch(ctx, branchName)
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		return fmt.Errorf("creating batch PR: %w", err)
+	}
+
+	a.log.Info("batch pull request created", "pr_url", prURL, "items", len(items))
+
+	// Mark all items done
+	for _, item := range items {
+		item.Status = backlog.StatusDone
+		item.PRLink = prURL
+		if err := a.store.Update(ctx, item); err != nil {
+			a.log.Error("failed to update item status to done", "title", item.Title, "error", err)
+		}
+		stats.Items = append(stats.Items, ItemResult{
+			Title:    item.Title,
+			Category: string(item.Category),
+			Status:   "done",
+			PRLink:   prURL,
+		})
+	}
+	stats.ItemsImplemented += len(items)
+	stats.PRsCreated++
+
+	// Enable auto-merge if configured
+	if a.cfg.GitHub.AutoMerge {
+		if err := a.prCreator.EnableAutoMerge(ctx, a.repo.WorkDir(), prURL); err != nil {
+			a.log.Warn("auto-merge failed for batch PR", "pr", prURL, "error", err)
+		} else {
+			stats.PRsAutoMerged++
+		}
+	}
+
+	// Return to main branch and clean up
+	if err := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); err != nil {
+		return fmt.Errorf("checkout main branch after batch PR: %w", err)
+	}
+	if err := a.repo.DeleteBranch(ctx, branchName); err != nil {
+		a.log.Warn("failed to delete local batch branch", "branch", branchName, "error", err)
 	}
 
 	return nil

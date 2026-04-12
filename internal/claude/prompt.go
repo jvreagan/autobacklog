@@ -96,6 +96,48 @@ Review and update any documentation (README, doc comments, etc.) that should ref
 Only update documentation that is directly affected by the changes. Don't add documentation where none existed before unless the changes warrant it.`, changeList)
 }
 
+// AddressReviewPrompt generates a prompt for Claude to address PR review feedback.
+// Truncates feedback to maxPromptTestOutput to control token usage.
+func AddressReviewPrompt(itemTitle, feedback string) string {
+	if len(feedback) > maxPromptTestOutput {
+		feedback = "... (truncated) ...\n" + feedback[len(feedback)-maxPromptTestOutput:]
+	}
+	return docsDirective + fmt.Sprintf(`A pull request for the following item has received review feedback:
+
+<pr-title>%s</pr-title>
+
+<review-feedback>
+%s
+</review-feedback>
+
+Address the review feedback by making the requested code changes. Follow existing code conventions and style.
+Make minimal, focused changes — only address what the reviewers asked for.
+Do not refactor unrelated code.`, itemTitle, feedback)
+}
+
+// BatchImplementPrompt generates a prompt for Claude to implement multiple items at once.
+func BatchImplementPrompt(items []*backlog.Item) string {
+	var b strings.Builder
+	b.WriteString(docsDirective)
+	b.WriteString("Implement the following backlog items. Make all necessary code changes for each item.\n")
+	b.WriteString("Follow existing code conventions and style. If new tests are needed, add them.\n")
+	b.WriteString("Make minimal, focused changes — don't refactor unrelated code.\n\n")
+
+	for i, item := range items {
+		fmt.Fprintf(&b, `<backlog-item index="%d">
+Title: %s
+Description: %s
+File: %s
+Category: %s
+Priority: %s
+</backlog-item>
+
+`, i+1, item.Title, item.Description, item.FilePath, item.Category, item.Priority)
+	}
+
+	return b.String()
+}
+
 // DetectTestPrompt generates a prompt for Claude to figure out how to test a project.
 func DetectTestPrompt() string {
 	return `Analyze this project and determine how to run its test suite.

@@ -41,20 +41,21 @@ const (
 
 // Item represents a single backlog improvement item.
 type Item struct {
-	ID          string    `json:"id"`
-	RepoURL     string    `json:"repo_url"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	FilePath    string    `json:"file_path"`
-	LineNumber  int       `json:"line_number,omitempty"`
-	IssueNumber int       `json:"issue_number,omitempty"`
-	Priority    Priority  `json:"priority"`
-	Category    Category  `json:"category"`
-	Status      Status    `json:"status"`
-	Attempts    int       `json:"attempts"`
-	PRLink      string    `json:"pr_link,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	RepoURL        string    `json:"repo_url"`
+	Title          string    `json:"title"`
+	Description    string    `json:"description"`
+	FilePath       string    `json:"file_path"`
+	LineNumber     int       `json:"line_number,omitempty"`
+	IssueNumber    int       `json:"issue_number,omitempty"`
+	Priority       Priority  `json:"priority"`
+	Category       Category  `json:"category"`
+	Status         Status    `json:"status"`
+	Attempts       int       `json:"attempts"`
+	PRLink         string    `json:"pr_link,omitempty"`
+	LastReviewHash string    `json:"last_review_hash,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // ValidPriority returns true if p is a recognized priority value.

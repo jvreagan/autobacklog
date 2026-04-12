@@ -279,6 +279,9 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("notifications.recipients is required when notifications are enabled")
 		}
 	}
+	if cfg.Backlog.BatchImplement && cfg.Backlog.MaxConcurrent > 1 {
+		return fmt.Errorf("batch_implement and max_concurrent > 1 are mutually exclusive")
+	}
 	// #206: warn about unresolved env var placeholders
 	warnUnresolvedVars(cfg)
 	return nil

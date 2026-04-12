@@ -89,3 +89,68 @@ func TestDetectTestPrompt(t *testing.T) {
 		t.Error("should mention command field")
 	}
 }
+
+func TestAddressReviewPrompt(t *testing.T) {
+	p := AddressReviewPrompt("Fix null pointer", "Please add a nil check before dereferencing")
+
+	if !strings.Contains(p, "Fix null pointer") {
+		t.Error("should contain item title")
+	}
+	if !strings.Contains(p, "Please add a nil check") {
+		t.Error("should contain review feedback")
+	}
+	if !strings.Contains(p, "<review-feedback>") {
+		t.Error("should wrap feedback in XML tags")
+	}
+	if !strings.Contains(p, "docs/") {
+		t.Error("should contain docs directive")
+	}
+}
+
+func TestAddressReviewPrompt_Truncation(t *testing.T) {
+	longFeedback := strings.Repeat("x", maxPromptTestOutput+1000)
+	p := AddressReviewPrompt("title", longFeedback)
+
+	if !strings.Contains(p, "... (truncated) ...") {
+		t.Error("should contain truncation marker")
+	}
+	// Prompt should be shorter than if all feedback were included
+	pFull := AddressReviewPrompt("title", "short")
+	overhead := len(pFull) - len("short")
+	if len(p) > overhead+maxPromptTestOutput+100 {
+		t.Errorf("prompt too long: %d chars, expected around %d", len(p), overhead+maxPromptTestOutput)
+	}
+}
+
+func TestBatchImplementPrompt(t *testing.T) {
+	items := []*backlog.Item{
+		{Title: "Fix null pointer", Description: "Handle nil case", FilePath: "handlers/user.go", Category: backlog.CategoryBug, Priority: backlog.PriorityHigh},
+		{Title: "Add caching", Description: "Cache API responses", FilePath: "api/client.go", Category: backlog.CategoryPerformance, Priority: backlog.PriorityMedium},
+		{Title: "Update docs", Description: "Fix typos in README", FilePath: "README.md", Category: backlog.CategoryDocs, Priority: backlog.PriorityLow},
+	}
+
+	p := BatchImplementPrompt(items)
+
+	// All items should appear with XML tags
+	for i, item := range items {
+		if !strings.Contains(p, item.Title) {
+			t.Errorf("should contain title of item %d", i)
+		}
+		if !strings.Contains(p, item.Description) {
+			t.Errorf("should contain description of item %d", i)
+		}
+		if !strings.Contains(p, item.FilePath) {
+			t.Errorf("should contain file path of item %d", i)
+		}
+	}
+
+	if !strings.Contains(p, `<backlog-item index="1">`) {
+		t.Error("should contain indexed XML tags")
+	}
+	if !strings.Contains(p, `<backlog-item index="3">`) {
+		t.Error("should contain XML tag for third item")
+	}
+	if !strings.Contains(p, "docs/") {
+		t.Error("should contain docs directive")
+	}
+}

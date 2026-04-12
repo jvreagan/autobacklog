@@ -25,6 +25,7 @@ github:
   auto_merge: false                    # enable to auto-merge PRs after CI passes
   create_issues: false                 # create GitHub issues for new backlog items
   issue_label: "autobacklog"           # label for importing/creating issues
+  pr_follow_up: false                  # auto-address PR review comments
 
 # -----------------------------------------------------------------------------
 # Claude Code CLI
@@ -46,6 +47,7 @@ backlog:
   low_threshold: 5                   # batch when 5+ low items accumulate
   max_per_cycle: 5                   # max items to implement per cycle
   stale_days: 30                     # auto-clean terminal items after N days
+  # batch_implement: false           # implement all selected items in one Claude session
 
 # -----------------------------------------------------------------------------
 # Testing

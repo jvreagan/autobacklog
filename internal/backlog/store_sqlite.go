@@ -106,6 +106,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_issue_number ON backlog_items(issue_number)`, log)
 	// #207: composite index for common dedup query pattern
 	execMigration(db, `CREATE INDEX IF NOT EXISTS idx_repo_status ON backlog_items(repo_url, status)`, log)
+	execMigration(db, `ALTER TABLE backlog_items ADD COLUMN last_review_hash TEXT NOT NULL DEFAULT ''`, log)
 
 	// Cost analytics table
 	execMigration(db, `CREATE TABLE IF NOT EXISTS cost_records (
@@ -155,10 +156,10 @@ func (s *storeOps) Insert(ctx context.Context, item *Item) error {
 		return fmt.Errorf("inserting item: title is required")
 	}
 	_, err := s.q.ExecContext(ctx,
-		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO backlog_items (id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
-		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink,
+		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink, item.LastReviewHash,
 		item.CreatedAt, item.UpdatedAt,
 	)
 	if err != nil {
@@ -174,10 +175,10 @@ func (s *storeOps) Insert(ctx context.Context, item *Item) error {
 func (s *storeOps) Update(ctx context.Context, item *Item) error {
 	now := time.Now().UTC()
 	result, err := s.q.ExecContext(ctx,
-		`UPDATE backlog_items SET repo_url=?, title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, updated_at=?
+		`UPDATE backlog_items SET repo_url=?, title=?, description=?, file_path=?, line_number=?, issue_number=?, priority=?, category=?, status=?, attempts=?, pr_link=?, last_review_hash=?, updated_at=?
 		 WHERE id=?`,
 		item.RepoURL, item.Title, item.Description, item.FilePath, item.LineNumber, item.IssueNumber,
-		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink,
+		item.Priority, item.Category, item.Status, item.Attempts, item.PRLink, item.LastReviewHash,
 		now, item.ID,
 	)
 	if err != nil {
@@ -199,7 +200,7 @@ func (s *storeOps) Update(ctx context.Context, item *Item) error {
 // Get retrieves an item by ID from the store.
 func (s *storeOps) Get(ctx context.Context, id string) (*Item, error) {
 	row := s.q.QueryRowContext(ctx,
-		`SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at
+		`SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, created_at, updated_at
 		 FROM backlog_items WHERE id=?`, id)
 	item, err := scanRow(row)
 	if err != nil {
@@ -210,7 +211,7 @@ func (s *storeOps) Get(ctx context.Context, id string) (*Item, error) {
 
 // List returns items matching the given filter from the store.
 func (s *storeOps) List(ctx context.Context, filter ListFilter) ([]*Item, error) {
-	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, created_at, updated_at FROM backlog_items WHERE 1=1`
+	query := `SELECT id, repo_url, title, description, file_path, line_number, issue_number, priority, category, status, attempts, pr_link, last_review_hash, created_at, updated_at FROM backlog_items WHERE 1=1`
 	args := []any{}
 
 	if len(filter.Statuses) > 0 {
@@ -410,7 +411,7 @@ func scanRow(s scanner) (*Item, error) {
 	item := &Item{}
 	err := s.Scan(
 		&item.ID, &item.RepoURL, &item.Title, &item.Description, &item.FilePath, &item.LineNumber, &item.IssueNumber,
-		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink,
+		&item.Priority, &item.Category, &item.Status, &item.Attempts, &item.PRLink, &item.LastReviewHash,
 		&item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {

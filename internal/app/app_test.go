@@ -161,9 +161,12 @@ type mockPRCreator struct {
 	autoMergeErr     error
 	checkPRState     gh.PRState
 	checkPRErr       error
+	fetchReviewsResult *gh.PRReviewsResult
+	fetchReviewsErr    error
 	createPRCalls    int
 	autoMergeCalls   int
 	checkPRCalls     int
+	fetchReviewsCalls int
 }
 
 func (m *mockPRCreator) CreatePR(_ context.Context, _ string, _ gh.PRRequest) (string, error) {
@@ -182,6 +185,17 @@ func (m *mockPRCreator) CheckPRStatus(_ context.Context, _, _ string) (*gh.PRSta
 		return nil, m.checkPRErr
 	}
 	return &gh.PRStatusResult{State: m.checkPRState}, nil
+}
+
+func (m *mockPRCreator) FetchPRReviews(_ context.Context, _, _ string) (*gh.PRReviewsResult, error) {
+	m.fetchReviewsCalls++
+	if m.fetchReviewsErr != nil {
+		return nil, m.fetchReviewsErr
+	}
+	if m.fetchReviewsResult != nil {
+		return m.fetchReviewsResult, nil
+	}
+	return &gh.PRReviewsResult{}, nil
 }
 
 type mockIssueManager struct {
@@ -2049,6 +2063,10 @@ func (p *prBodyCapture) CheckPRStatus(ctx context.Context, workDir string, prURL
 	return p.inner.CheckPRStatus(ctx, workDir, prURL)
 }
 
+func (p *prBodyCapture) FetchPRReviews(ctx context.Context, workDir string, prURL string) (*gh.PRReviewsResult, error) {
+	return p.inner.FetchPRReviews(ctx, workDir, prURL)
+}
+
 // ---------------------------------------------------------------------------
 // inferFromLabels tests (#101)
 // ---------------------------------------------------------------------------
@@ -2414,5 +2432,425 @@ func TestDoImplement_ConcurrentFallback(t *testing.T) {
 	// Should have used sequential path (mockRepo doesn't implement WorktreeProvider)
 	if repo.createBranchCalls != 1 {
 		t.Errorf("createBranchCalls = %d, want 1 (sequential fallback)", repo.createBranchCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PR Follow-Up tests
+// ---------------------------------------------------------------------------
+
+func TestFollowUpOnReview_NoReviews(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.fetchReviewsResult = &gh.PRReviewsResult{Reviews: nil, HeadBranch: "feature-branch"}
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	a.followUpOnReview(ctx, item, stats)
+
+	ai := a.claude.(*mockAIClient)
+	if ai.runPrintCalls != 0 {
+		t.Errorf("Claude should not be invoked when no reviews, got %d calls", ai.runPrintCalls)
+	}
+	if stats.PRsFollowedUp != 0 {
+		t.Errorf("PRsFollowedUp = %d, want 0", stats.PRsFollowedUp)
+	}
+}
+
+func TestFollowUpOnReview_AlreadyAddressed(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	reviews := []gh.PRReviewComment{{Body: "Fix this", Author: "reviewer", State: "CHANGES_REQUESTED"}}
+	hash := gh.ReviewsHash(reviews)
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.fetchReviewsResult = &gh.PRReviewsResult{Reviews: reviews, HeadBranch: "feature-branch"}
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	item.LastReviewHash = hash // Already addressed
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	a.followUpOnReview(ctx, item, stats)
+
+	ai := a.claude.(*mockAIClient)
+	if ai.runPrintCalls != 0 {
+		t.Errorf("Claude should not be invoked when reviews already addressed, got %d calls", ai.runPrintCalls)
+	}
+}
+
+func TestFollowUpOnReview_Success(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	reviews := []gh.PRReviewComment{
+		{Body: "Please add error handling", Author: "reviewer", State: "CHANGES_REQUESTED"},
+	}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.fetchReviewsResult = &gh.PRReviewsResult{Reviews: reviews, HeadBranch: "feature-branch"}
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = true
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"done"}
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	a.followUpOnReview(ctx, item, stats)
+
+	if ai.runPrintCalls != 1 {
+		t.Errorf("Claude should be invoked once, got %d calls", ai.runPrintCalls)
+	}
+	if repo.stageAllCalls != 1 {
+		t.Errorf("stageAllCalls = %d, want 1", repo.stageAllCalls)
+	}
+	if repo.commitCalls != 1 {
+		t.Errorf("commitCalls = %d, want 1", repo.commitCalls)
+	}
+	if repo.pushCalls != 1 {
+		t.Errorf("pushCalls = %d, want 1", repo.pushCalls)
+	}
+	if stats.PRsFollowedUp != 1 {
+		t.Errorf("PRsFollowedUp = %d, want 1", stats.PRsFollowedUp)
+	}
+
+	// Verify hash was updated
+	updated, err := a.store.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedHash := gh.ReviewsHash(reviews)
+	if updated.LastReviewHash != expectedHash {
+		t.Errorf("LastReviewHash = %q, want %q", updated.LastReviewHash, expectedHash)
+	}
+}
+
+func TestFollowUpOnReview_NoChanges(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	reviews := []gh.PRReviewComment{
+		{Body: "Looks odd but ok", Author: "reviewer", State: "COMMENTED"},
+	}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.fetchReviewsResult = &gh.PRReviewsResult{Reviews: reviews, HeadBranch: "feature-branch"}
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = false // Claude made no changes
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"no changes needed"}
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	a.followUpOnReview(ctx, item, stats)
+
+	if repo.commitCalls != 0 {
+		t.Errorf("commitCalls = %d, want 0 (no changes)", repo.commitCalls)
+	}
+	if stats.PRsFollowedUp != 0 {
+		t.Errorf("PRsFollowedUp = %d, want 0 (no changes)", stats.PRsFollowedUp)
+	}
+
+	// Hash should still be updated to prevent re-processing
+	updated, err := a.store.Get(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedHash := gh.ReviewsHash(reviews)
+	if updated.LastReviewHash != expectedHash {
+		t.Errorf("LastReviewHash should be updated even when no changes, got %q, want %q", updated.LastReviewHash, expectedHash)
+	}
+}
+
+func TestFollowUpOnReview_Disabled(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.GitHub.PRFollowUp = false
+	ctx := context.Background()
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.checkPRState = gh.PRStateOpen
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	if err := a.doReconcile(ctx, stats); err != nil {
+		t.Fatal(err)
+	}
+
+	// FetchPRReviews should not be called when pr_follow_up is false
+	if pr.fetchReviewsCalls != 0 {
+		t.Errorf("fetchReviewsCalls = %d, want 0 (disabled)", pr.fetchReviewsCalls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Batch Implementation tests
+// ---------------------------------------------------------------------------
+
+func TestDoImplementBatch_FullFlow(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Backlog.BatchImplement = true
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = true
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented all items"}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.prURL = "https://github.com/test/repo/pull/99"
+
+	// Insert 3 items
+	var items []*backlog.Item
+	for i := 0; i < 3; i++ {
+		item := backlog.NewItem(fmt.Sprintf("item-%d", i), "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+		item.RepoURL = a.cfg.Repo.URL
+		if err := a.store.Insert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	a.selectedItems = items
+
+	stats := &CycleStats{}
+	if err := a.doImplement(ctx, stats); err != nil {
+		t.Fatalf("doImplement: %v", err)
+	}
+
+	// Should have used batch path: 1 branch, 1 Claude call, 1 PR
+	if repo.createBranchCalls != 1 {
+		t.Errorf("createBranchCalls = %d, want 1", repo.createBranchCalls)
+	}
+	if ai.runPrintCalls != 1 {
+		t.Errorf("runPrintCalls = %d, want 1", ai.runPrintCalls)
+	}
+	if pr.createPRCalls != 1 {
+		t.Errorf("createPRCalls = %d, want 1", pr.createPRCalls)
+	}
+	if stats.ItemsImplemented != 3 {
+		t.Errorf("ItemsImplemented = %d, want 3", stats.ItemsImplemented)
+	}
+	if stats.PRsCreated != 1 {
+		t.Errorf("PRsCreated = %d, want 1", stats.PRsCreated)
+	}
+
+	// All items should be done
+	for _, item := range items {
+		got, err := a.store.Get(ctx, item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != backlog.StatusDone {
+			t.Errorf("item %s status = %s, want done", item.Title, got.Status)
+		}
+		if got.PRLink != "https://github.com/test/repo/pull/99" {
+			t.Errorf("item %s PRLink = %q, want PR URL", item.Title, got.PRLink)
+		}
+	}
+}
+
+func TestDoImplementBatch_SingleItemFallsThrough(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Backlog.BatchImplement = true
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = true
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"done"}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.prURL = "https://github.com/test/repo/pull/1"
+
+	// Only 1 item — should use sequential path
+	item := backlog.NewItem("single item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	a.selectedItems = []*backlog.Item{item}
+
+	stats := &CycleStats{}
+	if err := a.doImplement(ctx, stats); err != nil {
+		t.Fatalf("doImplement: %v", err)
+	}
+
+	// Should use sequential (1 item), which creates 1 branch per item
+	if stats.ItemsImplemented != 1 {
+		t.Errorf("ItemsImplemented = %d, want 1", stats.ItemsImplemented)
+	}
+}
+
+func TestDoImplementBatch_NoChanges(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Backlog.BatchImplement = true
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = false // Claude made no changes
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"nothing to do"}
+
+	var items []*backlog.Item
+	for i := 0; i < 3; i++ {
+		item := backlog.NewItem(fmt.Sprintf("item-%d", i), "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+		item.RepoURL = a.cfg.Repo.URL
+		if err := a.store.Insert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	a.selectedItems = items
+
+	stats := &CycleStats{}
+	if err := a.doImplement(ctx, stats); err != nil {
+		t.Fatalf("doImplement: %v", err)
+	}
+
+	// All items should be skipped
+	for _, item := range items {
+		got, err := a.store.Get(ctx, item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != backlog.StatusSkipped {
+			t.Errorf("item %s status = %s, want skipped", item.Title, got.Status)
+		}
+	}
+	if stats.ItemsImplemented != 0 {
+		t.Errorf("ItemsImplemented = %d, want 0", stats.ItemsImplemented)
+	}
+}
+
+func TestDoImplementBatch_TestFailure(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Backlog.BatchImplement = true
+	a.cfg.Testing.OverrideCommand = "make test"
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = true
+
+	ai := a.claude.(*mockAIClient)
+	// First call: batch implement, then: fix_test x MaxRetries
+	ai.runPrintOutputs = []string{"implemented", "fix1", "fix2"}
+
+	tr := a.runner.(*mockTestRunner)
+	// All test runs fail
+	tr.results = []*runner.Result{
+		{Passed: false, Output: "FAIL test1"},
+		{Passed: false, Output: "FAIL test2"},
+		{Passed: false, Output: "FAIL test3"},
+	}
+
+	var items []*backlog.Item
+	for i := 0; i < 2; i++ {
+		item := backlog.NewItem(fmt.Sprintf("item-%d", i), "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+		item.RepoURL = a.cfg.Repo.URL
+		if err := a.store.Insert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	a.selectedItems = items
+
+	stats := &CycleStats{}
+	err := a.doImplement(ctx, stats)
+	if err == nil {
+		t.Fatal("expected error from test failures")
+	}
+
+	// All items should be failed
+	for _, item := range items {
+		got, err := a.store.Get(ctx, item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != backlog.StatusFailed {
+			t.Errorf("item %s status = %s, want failed", item.Title, got.Status)
+		}
+	}
+}
+
+func TestDoImplementBatch_BudgetExceeded(t *testing.T) {
+	a := newTestApp(t, func(a *App) {
+		a.claude = newMockAIClient(1.0) // Very low budget
+		a.claude.(*mockAIClient).budget.Record(0.99) // Almost exhausted
+	})
+	a.cfg.Backlog.BatchImplement = true
+	a.cfg.Claude.MaxBudgetPerCall = 5.0
+	ctx := context.Background()
+
+	var items []*backlog.Item
+	for i := 0; i < 3; i++ {
+		item := backlog.NewItem(fmt.Sprintf("item-%d", i), "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+		item.RepoURL = a.cfg.Repo.URL
+		if err := a.store.Insert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	a.selectedItems = items
+
+	stats := &CycleStats{}
+	err := a.doImplement(ctx, stats)
+	if err == nil {
+		t.Fatal("expected budget exceeded error")
+	}
+	if !strings.Contains(err.Error(), "budget exceeded") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// All items should be reset to pending
+	for _, item := range items {
+		got, err := a.store.Get(ctx, item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != backlog.StatusPending {
+			t.Errorf("item %s status = %s, want pending", item.Title, got.Status)
+		}
 	}
 }
