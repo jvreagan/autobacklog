@@ -36,7 +36,7 @@ func TestPortInUse(t *testing.T) {
 
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, nil, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, nil, log)
 
 	err = srv.Start()
 	if err == nil {
@@ -52,7 +52,7 @@ func TestStartSuccess(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return map[string]string{"key": "val"} }, nil, log)
+	srv := NewServer(port, hub, func() any { return map[string]string{"key": "val"} }, nil, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestSSEReceivesEvents(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, nil, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestSSETypeFilter(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, nil, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestConfigEndpoint(t *testing.T) {
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := map[string]any{"repo": "https://example.com", "mode": "oneshot"}
-	srv := NewServer(port, hub, func() any { return cfg }, nil, log)
+	srv := NewServer(port, hub, func() any { return cfg }, nil, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -200,7 +200,7 @@ func TestStatsEndpoint(t *testing.T) {
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	stats := map[string]any{"items_implemented": 3, "prs_created": 2}
-	srv := NewServer(port, hub, func() any { return nil }, func() any { return stats }, log)
+	srv := NewServer(port, hub, func() any { return nil }, func() any { return stats }, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -230,7 +230,7 @@ func TestStatsEndpointNil(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, nil, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -253,7 +253,7 @@ func TestStaticServing(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, nil, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -272,11 +272,71 @@ func TestStaticServing(t *testing.T) {
 	}
 }
 
+func TestCyclesEndpoint(t *testing.T) {
+	port := freePort(t)
+	hub := NewHub(100)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cycles := []map[string]any{
+		{"id": "cy1", "items_found": 5, "prs_created": 2},
+		{"id": "cy2", "items_found": 3, "prs_created": 1},
+	}
+	srv := NewServer(port, hub, func() any { return nil }, nil, func() any { return cycles }, log)
+
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown(context.Background())
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/cycles", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var got []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d cycles, want 2", len(got))
+	}
+	if got[0]["id"] != "cy1" {
+		t.Errorf("first cycle id = %v, want cy1", got[0]["id"])
+	}
+}
+
+func TestCyclesEndpointNil(t *testing.T) {
+	port := freePort(t)
+	hub := NewHub(100)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := NewServer(port, hub, func() any { return nil }, nil, nil, log)
+
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown(context.Background())
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/cycles", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if strings.TrimSpace(string(body)) != "null" {
+		t.Errorf("expected null body, got %q", string(body))
+	}
+}
+
 func TestShutdown(t *testing.T) {
 	port := freePort(t)
 	hub := NewHub(100)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(port, hub, func() any { return nil }, nil, log)
+	srv := NewServer(port, hub, func() any { return nil }, nil, nil, log)
 
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)

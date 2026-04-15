@@ -108,6 +108,49 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
   letter-spacing: 0.3px;
 }
 
+/* Cycle history table */
+#cycles-section {
+  padding: 8px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+#cycles-section h2 {
+  font-size: 12px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+#cycles-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+#cycles-table th {
+  text-align: left;
+  color: #8b949e;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid #30363d;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-size: 10px;
+}
+#cycles-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #21262d;
+  color: #c9d1d9;
+}
+#cycles-table tr:hover td { background: #1c2128; }
+#cycles-table .totals-row td {
+  font-weight: 700;
+  color: #58a6ff;
+  border-top: 1px solid #30363d;
+}
+
 /* Panes */
 #panes {
   display: flex;
@@ -166,6 +209,26 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
   <div id="stats-grid">
     <span class="stat-card"><span class="stat-label">waiting for cycle...</span></span>
   </div>
+</div>
+
+<div id="cycles-section">
+  <h2>Cycle History</h2>
+  <table id="cycles-table">
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>Found</th>
+        <th>New</th>
+        <th>Impl</th>
+        <th>PRs</th>
+        <th>Errors</th>
+        <th>Cost</th>
+      </tr>
+    </thead>
+    <tbody id="cycles-body">
+      <tr><td colspan="7" style="color:#8b949e">loading...</td></tr>
+    </tbody>
+  </table>
 </div>
 
 <div id="panes">
@@ -273,6 +336,57 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
     }
   }
 
+  // Cycle history
+  const cyclesBody = document.getElementById('cycles-body');
+
+  function renderCycles(data) {
+    cyclesBody.innerHTML = '';
+    if (!data || data.length === 0) {
+      cyclesBody.innerHTML = '<tr><td colspan="7" style="color:#8b949e">no cycle history</td></tr>';
+      return;
+    }
+    var totals = {found: 0, inserted: 0, impl: 0, prs: 0, errors: 0, cost: 0};
+    for (var i = 0; i < data.length; i++) {
+      var c = data[i];
+      var tr = document.createElement('tr');
+      var ts = c.timestamp ? new Date(c.timestamp).toLocaleString() : '-';
+      tr.innerHTML =
+        '<td>' + esc(ts) + '</td>' +
+        '<td>' + (c.items_found || 0) + '</td>' +
+        '<td>' + (c.items_inserted || 0) + '</td>' +
+        '<td>' + (c.items_implemented || 0) + '</td>' +
+        '<td>' + (c.prs_created || 0) + '</td>' +
+        '<td>' + (c.error_count || 0) + '</td>' +
+        '<td>' + esc(c.budget_summary || '-') + '</td>';
+      cyclesBody.appendChild(tr);
+      totals.found += c.items_found || 0;
+      totals.inserted += c.items_inserted || 0;
+      totals.impl += c.items_implemented || 0;
+      totals.prs += c.prs_created || 0;
+      totals.errors += c.error_count || 0;
+      totals.cost += c.total_cost || 0;
+    }
+    var ttr = document.createElement('tr');
+    ttr.className = 'totals-row';
+    ttr.innerHTML =
+      '<td>Totals (' + data.length + ' cycles)</td>' +
+      '<td>' + totals.found + '</td>' +
+      '<td>' + totals.inserted + '</td>' +
+      '<td>' + totals.impl + '</td>' +
+      '<td>' + totals.prs + '</td>' +
+      '<td>' + totals.errors + '</td>' +
+      '<td>$' + totals.cost.toFixed(2) + '</td>';
+    cyclesBody.appendChild(ttr);
+  }
+
+  function fetchCycles() {
+    fetch('/api/cycles')
+      .then(function(r) { return r.json(); })
+      .then(function(data) { renderCycles(data); })
+      .catch(function() {});
+  }
+  fetchCycles();
+
   // Load initial stats
   fetch('/api/stats')
     .then(function(r) { return r.json(); })
@@ -301,6 +415,7 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
 
     es.addEventListener('stats', function(e) {
       try { updateStats(JSON.parse(e.data)); } catch(err) {}
+      fetchCycles();
     });
 
     es.onerror = function() {

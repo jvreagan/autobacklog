@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/jamesreagan/autobacklog/internal/app"
 	"github.com/jamesreagan/autobacklog/internal/backlog"
@@ -54,6 +55,7 @@ func setup() (*setupResult, error) {
 	// orchestratorPtr is set after the orchestrator is created so the
 	// statsFn closure can reference it via deferred binding.
 	var orchestratorPtr **app.App
+	var storePtr *backlog.SQLiteStore
 	var hub *webui.Hub
 	var uiServer *webui.Server
 	if cfg.WebUI.Port > 0 {
@@ -68,6 +70,16 @@ func setup() (*setupResult, error) {
 				return nil
 			}
 			return (*orchestratorPtr).LastStats()
+		}, func() any {
+			if storePtr == nil {
+				return nil
+			}
+			since := time.Now().UTC().AddDate(0, 0, -30)
+			records, err := storePtr.ListCycles(context.Background(), cfg.Repo.URL, since)
+			if err != nil {
+				return nil
+			}
+			return records
 		}, bootLog)
 		if err := uiServer.Start(); err != nil {
 			return nil, err
@@ -102,6 +114,9 @@ func setup() (*setupResult, error) {
 		}
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+
+	// Wire up deferred store reference for the cyclesFn closure.
+	storePtr = store
 
 	// Create cancellable context before any work so all operations
 	// (including auth setup) respect shutdown signals.
