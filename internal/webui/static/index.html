@@ -212,7 +212,14 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
 </div>
 
 <div id="cycles-section">
-  <h2>Cycle History</h2>
+  <h2 style="display:flex;align-items:center;gap:8px;">Cycle History
+    <select id="cycles-days" style="font-family:inherit;font-size:11px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:2px 6px;">
+      <option value="7">7 days</option>
+      <option value="14">14 days</option>
+      <option value="30" selected>30 days</option>
+      <option value="90">90 days</option>
+    </select>
+  </h2>
   <table id="cycles-table">
     <thead>
       <tr>
@@ -379,13 +386,17 @@ header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
     cyclesBody.appendChild(ttr);
   }
 
+  var cyclesDaysSelect = document.getElementById('cycles-days');
+
   function fetchCycles() {
-    fetch('/api/cycles')
+    var days = cyclesDaysSelect.value;
+    fetch('/api/cycles?days=' + days)
       .then(function(r) { return r.json(); })
       .then(function(data) { renderCycles(data); })
       .catch(function() {});
   }
   fetchCycles();
+  cyclesDaysSelect.addEventListener('change', fetchCycles);
 
   // Load initial stats
   fetch('/api/stats')

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"strings"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 )
 
 //go:embed static/*
@@ -18,26 +20,30 @@ var staticFiles embed.FS
 
 // Server serves the web UI and SSE event streams.
 type Server struct {
-	port     int
-	hub      *Hub
-	configFn func() any
-	statsFn  func() any
-	cyclesFn func() any
-	log      *slog.Logger
-	srv      *http.Server
-	listener net.Listener
+	port      int
+	hub       *Hub
+	configFn  func() any
+	statsFn   func() any
+	cyclesFn  func(days int) any
+	healthFn  func() any
+	log       *slog.Logger
+	srv       *http.Server
+	listener  net.Listener
+	startedAt time.Time
 }
 
 // NewServer creates a new web UI server. configFn returns the sanitized
 // config to expose via the /api/config endpoint. statsFn returns the latest
-// cycle stats (may be nil). cyclesFn returns historical cycle records.
-func NewServer(port int, hub *Hub, configFn func() any, statsFn func() any, cyclesFn func() any, log *slog.Logger) *Server {
+// cycle stats (may be nil). cyclesFn returns historical cycle records for
+// the given number of days. healthFn returns dynamic health data.
+func NewServer(port int, hub *Hub, configFn func() any, statsFn func() any, cyclesFn func(days int) any, healthFn func() any, log *slog.Logger) *Server {
 	return &Server{
 		port:     port,
 		hub:      hub,
 		configFn: configFn,
 		statsFn:  statsFn,
 		cyclesFn: cyclesFn,
+		healthFn: healthFn,
 		log:      log,
 	}
 }
@@ -50,6 +56,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("webui port %d is already in use", s.port)
 	}
 	s.listener = ln
+	s.startedAt = time.Now().UTC()
 
 	mux := http.NewServeMux()
 
@@ -72,6 +79,9 @@ func (s *Server) Start() error {
 
 	// Cycles endpoint
 	mux.HandleFunc("GET /api/cycles", s.handleCycles)
+
+	// Health endpoint
+	mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	s.srv = &http.Server{Handler: mux}
 
@@ -174,9 +184,40 @@ func (s *Server) handleCycles(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("null"))
 		return
 	}
-	data := s.cyclesFn()
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			days = n
+		}
+	}
+	if days < 1 {
+		days = 1
+	} else if days > 365 {
+		days = 365
+	}
+	data := s.cyclesFn(days)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		s.log.Error("failed to encode cycles", "error", err)
+	}
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	uptime := time.Since(s.startedAt).Seconds()
+	resp := map[string]any{
+		"status":         "ok",
+		"uptime_seconds": int(uptime),
+		"started_at":     s.startedAt.Format(time.RFC3339),
+	}
+	if s.healthFn != nil {
+		if extra, ok := s.healthFn().(map[string]any); ok {
+			for k, v := range extra {
+				resp[k] = v
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.log.Error("failed to encode health", "error", err)
 	}
 }

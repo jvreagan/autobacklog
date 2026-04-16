@@ -70,16 +70,35 @@ func setup() (*setupResult, error) {
 				return nil
 			}
 			return (*orchestratorPtr).LastStats()
-		}, func() any {
+		}, func(days int) any {
 			if storePtr == nil {
 				return nil
 			}
-			since := time.Now().UTC().AddDate(0, 0, -30)
+			since := time.Now().UTC().AddDate(0, 0, -days)
 			records, err := storePtr.ListCycles(context.Background(), cfg.Repo.URL, since)
 			if err != nil {
 				return nil
 			}
 			return records
+		}, func() any {
+			result := map[string]any{}
+			if storePtr != nil {
+				since := time.Now().UTC().AddDate(-1, 0, 0) // look back 1 year
+				records, err := storePtr.ListCycles(context.Background(), cfg.Repo.URL, since)
+				if err == nil {
+					result["total_cycles"] = len(records)
+					if len(records) > 0 {
+						result["last_cycle_at"] = records[len(records)-1].Timestamp.Format(time.RFC3339)
+					}
+				}
+			}
+			if *orchestratorPtr != nil {
+				stats := (*orchestratorPtr).LastStats()
+				if stats != nil {
+					result["errors_last_cycle"] = len(stats.Errors)
+				}
+			}
+			return result
 		}, bootLog)
 		if err := uiServer.Start(); err != nil {
 			return nil, err
