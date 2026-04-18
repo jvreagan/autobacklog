@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -108,7 +109,9 @@ func setup() (*setupResult, error) {
 	// Set up logging, optionally teeing to the web UI hub.
 	var log *slog.Logger
 	if hub != nil {
-		logWriter := webui.NewTeeWriter(os.Stderr, hub, webui.EventLog)
+		// Use io.Discard as the underlying writer because SetupWithExtraWriter
+		// already writes to os.Stderr — using os.Stderr here would duplicate lines.
+		logWriter := webui.NewTeeWriter(io.Discard, hub, webui.EventLog)
 		log, err = logging.SetupWithExtraWriter(cfg.Logging, logWriter)
 	} else {
 		log, err = logging.Setup(cfg.Logging)
