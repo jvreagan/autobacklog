@@ -54,6 +54,21 @@ Increase the budget in your config file and restart the daemon.
 	}
 }
 
+// BurnRateNotification creates a notification when the burn rate is exceeded.
+func BurnRateNotification(rate, limit float64) Notification {
+	return Notification{
+		Event:   EventOutOfTokens,
+		Subject: "Burn rate exceeded — implementations paused",
+		Body: fmt.Sprintf(`The autobacklog daemon has paused implementations because the spend rate is too high.
+
+Current rate: $%.2f/hour
+Limit:        $%.2f/hour
+
+Implementations will resume automatically once the rate drops below the limit.
+`, rate, limit),
+	}
+}
+
 // PRCreatedNotification creates a notification when a new PR is created.
 func PRCreatedNotification(title, prURL, description string) Notification {
 	return Notification{

@@ -6,7 +6,7 @@ import (
 	"net/smtp"
 	"strings"
 
-	"github.com/jamesreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/config"
 )
 
 // EmailNotifier sends notifications via SMTP.

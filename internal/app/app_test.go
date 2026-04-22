@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
-	"github.com/jamesreagan/autobacklog/internal/claude"
-	"github.com/jamesreagan/autobacklog/internal/config"
-	gh "github.com/jamesreagan/autobacklog/internal/github"
-	"github.com/jamesreagan/autobacklog/internal/notify"
-	"github.com/jamesreagan/autobacklog/internal/runner"
+	"github.com/jvreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/claude"
+	"github.com/jvreagan/autobacklog/internal/config"
+	gh "github.com/jvreagan/autobacklog/internal/github"
+	"github.com/jvreagan/autobacklog/internal/notify"
+	"github.com/jvreagan/autobacklog/internal/runner"
 )
 
 // ---------------------------------------------------------------------------

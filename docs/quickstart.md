@@ -3,13 +3,13 @@
 ## 1. Install
 
 ```bash
-go install github.com/jamesreagan/autobacklog/cmd/autobacklog@latest
+go install github.com/jvreagan/autobacklog/cmd/autobacklog@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/jamesreagan/autobacklog.git
+git clone https://github.com/jvreagan/autobacklog.git
 cd autobacklog
 make build
 ```

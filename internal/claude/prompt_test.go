@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/backlog"
 )
 
 func TestReviewPrompt(t *testing.T) {

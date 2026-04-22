@@ -1,4 +1,4 @@
-module github.com/jamesreagan/autobacklog
+module github.com/jvreagan/autobacklog
 
 go 1.22
 

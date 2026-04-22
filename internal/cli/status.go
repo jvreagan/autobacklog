@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
-	"github.com/jamesreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/config"
 )
 
 func newStatusCmd() *cobra.Command {

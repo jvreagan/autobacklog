@@ -3,7 +3,7 @@ package claude
 import (
 	"testing"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/backlog"
 )
 
 func TestExtractJSON(t *testing.T) {

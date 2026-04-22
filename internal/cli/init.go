@@ -16,7 +16,7 @@ func newInitCmd() *cobra.Command {
 }
 
 const exampleConfig = `# Autobacklog Configuration
-# See https://github.com/jamesreagan/autobacklog for full documentation.
+# See https://github.com/jvreagan/autobacklog for full documentation.
 
 repo:
   url: "https://github.com/your-org/your-repo.git"

@@ -23,7 +23,7 @@ CLONE → IMPORT_ISSUES → REVIEW → INGEST → EVALUATE → IMPLEMENT → TES
 
 ```bash
 # Install
-go install github.com/jamesreagan/autobacklog/cmd/autobacklog@latest
+go install github.com/jvreagan/autobacklog/cmd/autobacklog@latest
 
 # Generate config
 autobacklog init

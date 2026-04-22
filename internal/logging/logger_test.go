@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jamesreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/config"
 )
 
 func TestSetup_DefaultLevel(t *testing.T) {

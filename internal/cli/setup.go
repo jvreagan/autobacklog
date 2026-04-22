@@ -11,13 +11,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jamesreagan/autobacklog/internal/app"
-	"github.com/jamesreagan/autobacklog/internal/backlog"
-	"github.com/jamesreagan/autobacklog/internal/config"
-	gh "github.com/jamesreagan/autobacklog/internal/github"
-	"github.com/jamesreagan/autobacklog/internal/logging"
-	"github.com/jamesreagan/autobacklog/internal/notify"
-	"github.com/jamesreagan/autobacklog/internal/webui"
+	"github.com/jvreagan/autobacklog/internal/app"
+	"github.com/jvreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/config"
+	gh "github.com/jvreagan/autobacklog/internal/github"
+	"github.com/jvreagan/autobacklog/internal/logging"
+	"github.com/jvreagan/autobacklog/internal/notify"
+	"github.com/jvreagan/autobacklog/internal/webui"
 )
 
 // setupResult bundles the objects created during CLI setup.

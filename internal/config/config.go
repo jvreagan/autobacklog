@@ -253,6 +253,9 @@ func validate(cfg *Config) error {
 	if cfg.Claude.MaxBudgetTotal < 0 {
 		return fmt.Errorf("claude.max_budget_total must be non-negative, got %.2f", cfg.Claude.MaxBudgetTotal)
 	}
+	if cfg.Claude.MaxBurnRate < 0 {
+		return fmt.Errorf("claude.max_burn_rate must be non-negative, got %.2f", cfg.Claude.MaxBurnRate)
+	}
 	if cfg.Backlog.StaleDays < 0 {
 		return fmt.Errorf("backlog.stale_days must be non-negative, got %d", cfg.Backlog.StaleDays)
 	}

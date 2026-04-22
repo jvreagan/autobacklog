@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
-	"github.com/jamesreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/config"
 	"github.com/spf13/cobra"
 )
 

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jamesreagan/autobacklog/internal/testutil"
+	"github.com/jvreagan/autobacklog/internal/testutil"
 )
 
 func TestAddWorktree(t *testing.T) {

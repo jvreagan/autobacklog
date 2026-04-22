@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,14 +12,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jamesreagan/autobacklog/internal/backlog"
-	"github.com/jamesreagan/autobacklog/internal/claude"
-	"github.com/jamesreagan/autobacklog/internal/config"
-	"github.com/jamesreagan/autobacklog/internal/git"
-	gh "github.com/jamesreagan/autobacklog/internal/github"
-	"github.com/jamesreagan/autobacklog/internal/notify"
-	"github.com/jamesreagan/autobacklog/internal/runner"
+	"github.com/jvreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/claude"
+	"github.com/jvreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/git"
+	gh "github.com/jvreagan/autobacklog/internal/github"
+	"github.com/jvreagan/autobacklog/internal/notify"
+	"github.com/jvreagan/autobacklog/internal/runner"
 )
+
+// ErrBurnRateExceeded is returned when the spend rate exceeds the configured limit.
+var ErrBurnRateExceeded = errors.New("burn rate exceeded")
 
 // App is the main orchestrator that drives the state machine.
 type App struct {
@@ -142,6 +146,16 @@ func (a *App) LastStats() *CycleStats {
 	}
 	cp := *a.lastStats
 	return &cp
+}
+
+// BurnRateExceeded reports whether the current spend rate exceeds the configured limit.
+func (a *App) BurnRateExceeded() bool {
+	return a.claude.Budget().BurnRateExceeded(a.cfg.Claude.MaxBurnRate)
+}
+
+// CurrentBurnRate returns the current spend rate in USD/hour.
+func (a *App) CurrentBurnRate() float64 {
+	return a.claude.Budget().BurnRate()
 }
 
 // RunCycle executes one full cycle of the state machine.
@@ -733,7 +747,7 @@ func (a *App) createIssuesForNewItems(ctx context.Context, stats *CycleStats) {
 	}
 
 	for _, item := range items {
-		body := fmt.Sprintf("**%s**\n\n%s\n\n**File:** `%s`\n**Priority:** %s\n**Category:** %s\n\n---\n*Created by [autobacklog](https://github.com/jamesreagan/autobacklog)*",
+		body := fmt.Sprintf("**%s**\n\n%s\n\n**File:** `%s`\n**Priority:** %s\n**Category:** %s\n\n---\n*Created by [autobacklog](https://github.com/jvreagan/autobacklog)*",
 			item.Title, item.Description, item.FilePath, item.Priority, item.Category)
 
 		issueNum, err := a.issueManager.CreateIssue(ctx, a.repo.WorkDir(), item.Title, body, []string{label})
@@ -883,6 +897,14 @@ func (a *App) doImplementSequential(ctx context.Context, stats *CycleStats) erro
 		if err := a.implementItem(ctx, item, stats); err != nil {
 			a.log.Error("failed to implement item", "title", item.Title, "error", err)
 			stats.Errors = append(stats.Errors, err)
+			if errors.Is(err, ErrBurnRateExceeded) {
+				// Reset remaining items to pending
+				for _, remaining := range a.selectedItems[i+1:] {
+					a.resetItemStatus(ctx, remaining, backlog.StatusPending)
+				}
+				stats.BurnRateThrottled = true
+				break
+			}
 		}
 	}
 
@@ -910,6 +932,20 @@ func (a *App) doImplementBatch(ctx context.Context, stats *CycleStats) error {
 			a.resetItemStatus(ctx, item, backlog.StatusPending)
 		}
 		return fmt.Errorf("budget exceeded for batch of %d items", len(items))
+	}
+
+	// Burn-rate check
+	if a.claude.Budget().BurnRateExceeded(a.cfg.Claude.MaxBurnRate) {
+		rate := a.claude.Budget().BurnRate()
+		a.log.Warn("burn rate exceeded for batch", "rate", rate, "limit", a.cfg.Claude.MaxBurnRate)
+		for _, item := range items {
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		}
+		if nErr := a.notifier.Send(notify.BurnRateNotification(rate, a.cfg.Claude.MaxBurnRate)); nErr != nil {
+			a.log.Warn("failed to send burn-rate notification", "error", nErr)
+		}
+		stats.BurnRateThrottled = true
+		return fmt.Errorf("spend rate $%.2f/hr exceeds limit $%.2f/hr: %w", rate, a.cfg.Claude.MaxBurnRate, ErrBurnRateExceeded)
 	}
 
 	// Create one branch for the batch
@@ -1193,6 +1229,17 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 			a.log.Warn("failed to send out-of-tokens notification", "error", nErr)
 		}
 		return fmt.Errorf("budget exceeded")
+	}
+
+	// Check burn rate
+	if a.claude.Budget().BurnRateExceeded(a.cfg.Claude.MaxBurnRate) {
+		a.resetItemStatus(ctx, item, backlog.StatusPending)
+		rate := a.claude.Budget().BurnRate()
+		a.log.Warn("burn rate exceeded", "rate", rate, "limit", a.cfg.Claude.MaxBurnRate)
+		if nErr := a.notifier.Send(notify.BurnRateNotification(rate, a.cfg.Claude.MaxBurnRate)); nErr != nil {
+			a.log.Warn("failed to send burn-rate notification", "error", nErr)
+		}
+		return fmt.Errorf("spend rate $%.2f/hr exceeds limit $%.2f/hr: %w", rate, a.cfg.Claude.MaxBurnRate, ErrBurnRateExceeded)
 	}
 
 	// Create branch

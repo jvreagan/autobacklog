@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jamesreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/config"
 )
 
 // Client wraps the Claude Code CLI for subprocess invocation.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jamesreagan/autobacklog/internal/testutil"
+	"github.com/jvreagan/autobacklog/internal/testutil"
 )
 
 func TestParseRetryAfter(t *testing.T) {

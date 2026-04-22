@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
-	"github.com/jamesreagan/autobacklog/internal/config"
-	"github.com/jamesreagan/autobacklog/internal/notify"
-	"github.com/jamesreagan/autobacklog/internal/testutil"
+	"github.com/jvreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/notify"
+	"github.com/jvreagan/autobacklog/internal/testutil"
 )
 
 func TestEndToEnd_RunCycle(t *testing.T) {

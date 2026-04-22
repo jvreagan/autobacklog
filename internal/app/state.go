@@ -118,6 +118,7 @@ type CycleStats struct {
 	GitHubAPIRetries   int
 	GitHubAPIFailures  int
 	GitHubAPISummary   string
+	BurnRateThrottled  bool
 }
 
 // Merge accumulates totals from another CycleStats into the receiver.

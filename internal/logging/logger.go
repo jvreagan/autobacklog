@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jamesreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/config"
 )
 
 // #210: protect logCleanup with a mutex for goroutine safety

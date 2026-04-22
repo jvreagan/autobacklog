@@ -111,7 +111,7 @@ func FormatPRBody(_, description, category, testResults string, issueNumber int)
 		b.WriteString("\n" + fence + "\n\n")
 	}
 	b.WriteString("---\n")
-	b.WriteString("*Created automatically by [autobacklog](https://github.com/jamesreagan/autobacklog)*\n")
+	b.WriteString("*Created automatically by [autobacklog](https://github.com/jvreagan/autobacklog)*\n")
 	return b.String()
 }
 
@@ -255,6 +255,6 @@ func FormatBatchPRBody(items []BatchPRItem, testResults string) string {
 	}
 
 	b.WriteString("---\n")
-	b.WriteString("*Created automatically by [autobacklog](https://github.com/jamesreagan/autobacklog)*\n")
+	b.WriteString("*Created automatically by [autobacklog](https://github.com/jvreagan/autobacklog)*\n")
 	return b.String()
 }

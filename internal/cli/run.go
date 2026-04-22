@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jamesreagan/autobacklog/internal/app"
-	"github.com/jamesreagan/autobacklog/internal/logging"
+	"github.com/jvreagan/autobacklog/internal/app"
+	"github.com/jvreagan/autobacklog/internal/logging"
 )
 
 func newRunCmd() *cobra.Command {

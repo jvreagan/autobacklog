@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jamesreagan/autobacklog/internal/config"
-	"github.com/jamesreagan/autobacklog/internal/testutil"
+	"github.com/jvreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/testutil"
 )
 
 func newStubClient(t *testing.T, binary string, timeout time.Duration) *Client {

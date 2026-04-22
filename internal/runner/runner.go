@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jamesreagan/autobacklog/internal/claude"
+	"github.com/jvreagan/autobacklog/internal/claude"
 )
 
 // allowedTestCommands is the set of commands that auto-detection may produce.

@@ -42,6 +42,7 @@ type ClaudeConfig struct {
 	Model                     string        `yaml:"model"`                       // Model to use (sonnet, opus, haiku), default "sonnet"
 	MaxBudgetPerCall          float64       `yaml:"max_budget_per_call"`         // USD budget cap per CLI invocation, default 10.00
 	MaxBudgetTotal            float64       `yaml:"max_budget_total"`            // USD total budget across all invocations, default 100.00
+	MaxBurnRate               float64       `yaml:"max_burn_rate"`               // Max USD/hour spend rate; 0 = disabled
 	Timeout                   time.Duration `yaml:"timeout"`                     // Timeout per invocation, default 10m
 	DangerouslySkipPermissions bool         `yaml:"dangerously_skip_permissions"` // Pass --dangerously-skip-permissions to Claude CLI
 }

@@ -187,6 +187,33 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "negative burn rate",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				Claude:  ClaudeConfig{MaxBurnRate: -5.0},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid burn rate zero (disabled)",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				Claude:  ClaudeConfig{MaxBurnRate: 0},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid burn rate positive",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				Claude:  ClaudeConfig{MaxBurnRate: 10.0},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/backlog"
 )
 
 // docsDirective instructs Claude to read the docs/ directory for project context.

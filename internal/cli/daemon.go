@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jamesreagan/autobacklog/internal/app"
-	"github.com/jamesreagan/autobacklog/internal/config"
-	"github.com/jamesreagan/autobacklog/internal/logging"
-	"github.com/jamesreagan/autobacklog/internal/webui"
+	"github.com/jvreagan/autobacklog/internal/app"
+	"github.com/jvreagan/autobacklog/internal/config"
+	"github.com/jvreagan/autobacklog/internal/logging"
+	"github.com/jvreagan/autobacklog/internal/webui"
 )
 
 func newDaemonCmd() *cobra.Command {
@@ -91,6 +91,20 @@ func runDaemonLoop(ctx context.Context, cfg *config.Config, orchestrator *app.Ap
 		}
 
 		broadcastStats(hub, stats)
+
+		// If burn rate is exceeded, poll every 60s until it drops
+		if orchestrator.BurnRateExceeded() {
+			log.Info("burn rate exceeded, waiting for rate to drop", "rate", orchestrator.CurrentBurnRate(), "limit", cfg.Claude.MaxBurnRate)
+			for orchestrator.BurnRateExceeded() {
+				select {
+				case <-ctx.Done():
+					log.Info("daemon stopped")
+					return nil
+				case <-time.After(60 * time.Second):
+				}
+			}
+			log.Info("burn rate recovered, resuming", "rate", orchestrator.CurrentBurnRate())
+		}
 
 		log.Info("sleeping until next cycle", "duration", cfg.Daemon.Interval)
 		select {

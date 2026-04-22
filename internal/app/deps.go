@@ -3,9 +3,9 @@ package app
 import (
 	"context"
 
-	"github.com/jamesreagan/autobacklog/internal/claude"
-	gh "github.com/jamesreagan/autobacklog/internal/github"
-	"github.com/jamesreagan/autobacklog/internal/runner"
+	"github.com/jvreagan/autobacklog/internal/claude"
+	gh "github.com/jvreagan/autobacklog/internal/github"
+	"github.com/jvreagan/autobacklog/internal/runner"
 )
 
 // Repository abstracts git operations for testability.

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jamesreagan/autobacklog/internal/backlog"
+	"github.com/jvreagan/autobacklog/internal/backlog"
 )
 
 // ReviewFinding represents a single finding from Claude's review output.

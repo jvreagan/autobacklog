@@ -3,6 +3,7 @@ package claude
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBudget_NewBudget(t *testing.T) {
@@ -104,5 +105,85 @@ func TestBudget_LastCost(t *testing.T) {
 	b.Record(-1.0)
 	if b.LastCost() != 3.0 {
 		t.Errorf("LastCost() = %f, want 3.0 (negative should be ignored)", b.LastCost())
+	}
+}
+
+func TestBudget_BurnRate_NoInvocations(t *testing.T) {
+	b := NewBudget(100.0)
+	if rate := b.BurnRate(); rate != 0 {
+		t.Errorf("BurnRate() = %f, want 0 with no invocations", rate)
+	}
+}
+
+func TestBudget_BurnRate_SingleInvocation(t *testing.T) {
+	b := NewBudget(100.0)
+	b.Record(10.0)
+	if rate := b.BurnRate(); rate != 0 {
+		t.Errorf("BurnRate() = %f, want 0 with single invocation", rate)
+	}
+}
+
+func TestBudget_BurnRate_Calculated(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := start
+
+	b := NewBudget(100.0)
+	b.now = func() time.Time { return clock }
+
+	// First invocation at t=0
+	b.Record(10.0)
+
+	// Advance 30 minutes, second invocation
+	clock = start.Add(30 * time.Minute)
+	b.Record(10.0)
+
+	// Rate = $20 spent / 0.5 hours = $40/hour
+	rate := b.BurnRate()
+	if rate < 39.99 || rate > 40.01 {
+		t.Errorf("BurnRate() = %f, want ~40.0", rate)
+	}
+}
+
+func TestBudget_BurnRateExceeded_Disabled(t *testing.T) {
+	b := NewBudget(100.0)
+	b.Record(50.0)
+	b.Record(50.0)
+	// maxRate 0 = disabled
+	if b.BurnRateExceeded(0) {
+		t.Error("BurnRateExceeded(0) should always return false (disabled)")
+	}
+}
+
+func TestBudget_BurnRateExceeded_BelowThreshold(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := start
+
+	b := NewBudget(100.0)
+	b.now = func() time.Time { return clock }
+
+	b.Record(5.0)
+	clock = start.Add(1 * time.Hour)
+	b.Record(5.0)
+
+	// Rate = $10 / 1hr = $10/hr, limit is $20/hr
+	if b.BurnRateExceeded(20.0) {
+		t.Errorf("BurnRateExceeded(20.0) = true, but rate is $10/hr")
+	}
+}
+
+func TestBudget_BurnRateExceeded_AboveThreshold(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := start
+
+	b := NewBudget(100.0)
+	b.now = func() time.Time { return clock }
+
+	b.Record(20.0)
+	clock = start.Add(30 * time.Minute)
+	b.Record(20.0)
+
+	// Rate = $40 / 0.5hr = $80/hr, limit is $10/hr
+	if !b.BurnRateExceeded(10.0) {
+		t.Errorf("BurnRateExceeded(10.0) = false, but rate is $80/hr")
 	}
 }

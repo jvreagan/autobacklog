@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jamesreagan/autobacklog/internal/testutil"
+	"github.com/jvreagan/autobacklog/internal/testutil"
 )
 
 func TestCreatePR_Integration(t *testing.T) {
