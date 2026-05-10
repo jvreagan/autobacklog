@@ -63,7 +63,7 @@ func (r *Repo) CheckoutBranch(ctx context.Context, branch string) error {
 // available for HTTPS authentication.
 func (r *Repo) Push(ctx context.Context, branch string) error {
 	r.log.Info("pushing branch", "name", branch)
-	return r.runGit(ctx, r.workDir, "push", "origin", branch)
+	return r.runGitRetry(ctx, r.workDir, "push", "origin", branch)
 }
 
 // DeleteBranch deletes a local branch. Called after successful PR creation and

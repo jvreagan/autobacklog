@@ -479,6 +479,7 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 	reviews, err := a.prCreator.FetchPRReviews(ctx, a.repo.WorkDir(), item.PRLink)
 	if err != nil {
 		a.log.Warn("failed to fetch PR reviews", "title", item.Title, "error", err)
+		stats.FollowUpsFailed++
 		return
 	}
 
@@ -506,6 +507,7 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 	// Checkout the PR's head branch
 	if err := a.repo.CheckoutBranch(ctx, reviews.HeadBranch); err != nil {
 		a.log.Warn("failed to checkout PR branch for follow-up", "branch", reviews.HeadBranch, "error", err)
+		stats.FollowUpsFailed++
 		return
 	}
 	defer func() {
@@ -525,6 +527,7 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 	a.recordCost(ctx, "follow_up", item.ID)
 	if err != nil {
 		a.log.Warn("Claude failed to address review", "title", item.Title, "error", err)
+		stats.FollowUpsFailed++
 		// Still update hash to prevent re-processing the same reviews
 		item.LastReviewHash = hash
 		if updateErr := a.store.Update(ctx, item); updateErr != nil {
@@ -537,21 +540,25 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 	hasChanges, err := a.repo.HasChanges(ctx)
 	if err != nil {
 		a.log.Warn("failed to check for changes after follow-up", "error", err)
+		stats.FollowUpsFailed++
 		return
 	}
 
 	if hasChanges {
 		if err := a.repo.StageAll(ctx); err != nil {
 			a.log.Warn("failed to stage follow-up changes", "error", err)
+			stats.FollowUpsFailed++
 			return
 		}
 		commitMsg := fmt.Sprintf("autobacklog: address review comments for %s", item.Title)
 		if err := a.repo.Commit(ctx, commitMsg); err != nil {
 			a.log.Warn("failed to commit follow-up changes", "error", err)
+			stats.FollowUpsFailed++
 			return
 		}
 		if err := a.repo.Push(ctx, reviews.HeadBranch); err != nil {
 			a.log.Warn("failed to push follow-up changes", "error", err)
+			stats.FollowUpsFailed++
 			return
 		}
 		a.log.Info("pushed follow-up commit addressing reviews", "title", item.Title, "pr", item.PRLink)
@@ -598,7 +605,6 @@ func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
 		}
 	}
 
-	var importFailures int
 	for _, issue := range issues {
 		if importedNums[issue.Number] {
 			a.log.Info("issue already imported, skipping", "issue_number", issue.Number, "title", issue.Title)
@@ -612,17 +618,13 @@ func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {
 
 		if err := a.store.Insert(ctx, item); err != nil {
 			a.log.Warn("failed to import issue", "issue_number", issue.Number, "error", err)
-			importFailures++
+			stats.IssuesImportFailed++
 			continue
 		}
 
 		importedNums[issue.Number] = true
 		stats.IssuesImported++
 		a.log.Info("imported issue", "issue_number", issue.Number, "title", issue.Title)
-	}
-
-	if importFailures > 0 {
-		a.log.Warn("some issue imports failed", "failures", importFailures, "imported", stats.IssuesImported)
 	}
 
 	return nil

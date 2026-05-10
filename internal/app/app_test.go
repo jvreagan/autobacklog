@@ -2704,6 +2704,29 @@ func TestFollowUpOnReview_IncreasesCount(t *testing.T) {
 	}
 }
 
+func TestFollowUpOnReview_FetchError_IncrementsFailure(t *testing.T) {
+	a := newTestApp(t)
+	ctx := context.Background()
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.fetchReviewsErr = errors.New("connection reset by peer")
+
+	item := backlog.NewItem("test item", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	item.RepoURL = a.cfg.Repo.URL
+	item.Status = backlog.StatusDone
+	item.PRLink = "https://github.com/test/repo/pull/1"
+	if err := a.store.Insert(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := &CycleStats{}
+	a.followUpOnReview(ctx, item, stats)
+
+	if stats.FollowUpsFailed != 1 {
+		t.Errorf("FollowUpsFailed = %d, want 1", stats.FollowUpsFailed)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Batch Implementation tests
 // ---------------------------------------------------------------------------

@@ -35,6 +35,31 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 }
 
+func TestIsTransientError(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   bool
+	}{
+		{"connection refused", "dial tcp: connection refused", true},
+		{"connection reset", "read: connection reset by peer", true},
+		{"timed out", "net/http: request timed out", true},
+		{"eof", "unexpected EOF", true},
+		{"could not resolve", "Could not resolve host: api.github.com", true},
+		{"normal error", "HTTP 404: Not Found", false},
+		{"empty", "", false},
+		{"rate limit not transient", "API rate limit exceeded", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isTransientError(tt.stderr)
+			if got != tt.want {
+				t.Errorf("isTransientError(%q) = %v, want %v", tt.stderr, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsRateLimited(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -196,5 +221,59 @@ func TestRunGH_ContextCanceled(t *testing.T) {
 	_, err := runGH(ctx, workDir, log, "api", "/test")
 	if err == nil {
 		t.Fatal("expected error when context is canceled")
+	}
+}
+
+func TestRunGH_TransientRetry(t *testing.T) {
+	resetStats(t)
+	binDir := testutil.StubBinDir(t)
+	// Fail with "connection reset" twice, then succeed.
+	testutil.WriteStubScript(t, binDir, "gh", `
+COUNTER_FILE="$(pwd)/.gh_counter"
+if [ ! -f "$COUNTER_FILE" ]; then
+  echo 0 > "$COUNTER_FILE"
+fi
+COUNT=$(cat "$COUNTER_FILE")
+COUNT=$((COUNT + 1))
+echo $COUNT > "$COUNTER_FILE"
+if [ "$COUNT" -le 2 ]; then
+  echo "read: connection reset by peer" >&2
+  exit 1
+fi
+rm -f "$COUNTER_FILE"
+echo "success"
+`)
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	log := slog.Default()
+
+	out, err := runGH(ctx, workDir, log, "api", "/test")
+	if err != nil {
+		t.Fatalf("runGH should have succeeded after transient retries: %v", err)
+	}
+	if out != "success" {
+		t.Errorf("output = %q, want %q", out, "success")
+	}
+	if Stats.Retries() != 2 {
+		t.Errorf("Stats.Retries() = %d, want 2", Stats.Retries())
+	}
+	if Stats.Failures() != 0 {
+		t.Errorf("Stats.Failures() = %d, want 0", Stats.Failures())
+	}
+}
+
+func TestRunGH_Timeout(t *testing.T) {
+	resetStats(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled — simulates timeout
+
+	workDir := t.TempDir()
+	log := slog.Default()
+
+	_, err := runGH(ctx, workDir, log, "api", "/test")
+	if err == nil {
+		t.Fatal("expected error when context is already canceled")
 	}
 }

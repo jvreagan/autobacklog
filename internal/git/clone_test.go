@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -9,6 +10,31 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestIsGitTransient(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"connection refused", errors.New("dial tcp: connection refused"), true},
+		{"connection reset", errors.New("read: connection reset by peer"), true},
+		{"timed out", errors.New("net/http: request timed out"), true},
+		{"could not resolve host", errors.New("Could not resolve host: github.com"), true},
+		{"ssl error", errors.New("SSL_ERROR_SYSCALL"), true},
+		{"unable to access", errors.New("fatal: unable to access 'https://github.com/...'"), true},
+		{"normal error", errors.New("fatal: not a git repository"), false},
+		{"nil error", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isGitTransient(tt.err)
+			if got != tt.want {
+				t.Errorf("isGitTransient(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
 
 // TestRunRedactsPAT verifies the safety-net redaction in run(): even if a PAT
 // somehow appears in command arguments, it is scrubbed from error messages.

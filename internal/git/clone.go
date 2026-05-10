@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Repo manages git operations on a working directory.
@@ -55,7 +56,7 @@ func (r *Repo) clone(ctx context.Context) error {
 		return fmt.Errorf("creating work dir: %w", err)
 	}
 
-	if err := r.runGit(ctx, "", "clone", "--branch", r.branch, "--single-branch", r.url, r.workDir); err != nil {
+	if err := r.runGitRetry(ctx, "", "clone", "--branch", r.branch, "--single-branch", r.url, r.workDir); err != nil {
 		return fmt.Errorf("cloning repo: %w", err)
 	}
 
@@ -77,11 +78,52 @@ func (r *Repo) pull(ctx context.Context) error {
 	if err := r.runGit(ctx, r.workDir, "checkout", r.branch); err != nil {
 		return fmt.Errorf("checking out %s: %w", r.branch, err)
 	}
-	if err := r.runGit(ctx, r.workDir, "pull", "origin", r.branch); err != nil {
+	if err := r.runGitRetry(ctx, r.workDir, "pull", "origin", r.branch); err != nil {
 		return fmt.Errorf("pulling: %w", err)
 	}
 
 	return nil
+}
+
+// isGitTransient returns true if the error message indicates a transient
+// network issue worth retrying.
+func isGitTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "timed out") ||
+		strings.Contains(lower, "could not resolve host") ||
+		strings.Contains(lower, "ssl") ||
+		strings.Contains(lower, "unable to access")
+}
+
+// runGitRetry wraps runGit with retry logic for network-facing commands.
+// Retries up to 3 attempts with 2s/4s/8s backoff on transient errors.
+func (r *Repo) runGitRetry(ctx context.Context, dir string, args ...string) error {
+	backoffs := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+
+	var err error
+	for attempt := 0; ; attempt++ {
+		err = r.runGit(ctx, dir, args...)
+		if err == nil {
+			return nil
+		}
+		if !isGitTransient(err) || attempt >= len(backoffs) {
+			return err
+		}
+
+		r.log.Warn("git operation failed, retrying",
+			"attempt", attempt+1, "backoff", backoffs[attempt], "error", err)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoffs[attempt]):
+		}
+	}
 }
 
 // runGit runs a git subcommand. When a PAT is configured, credentials are

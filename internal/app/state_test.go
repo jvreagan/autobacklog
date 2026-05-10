@@ -201,3 +201,72 @@ func TestCycleStats_Merge_GitHubAPI(t *testing.T) {
 		t.Errorf("GitHubAPISummary = %q, want %q", a.GitHubAPISummary, want)
 	}
 }
+
+func TestCycleStats_Merge_PartialFailures(t *testing.T) {
+	a := &CycleStats{IssuesImportFailed: 1, FollowUpsFailed: 2}
+	b := &CycleStats{IssuesImportFailed: 3, FollowUpsFailed: 1}
+
+	a.Merge(b)
+
+	if a.IssuesImportFailed != 4 {
+		t.Errorf("IssuesImportFailed = %d, want 4", a.IssuesImportFailed)
+	}
+	if a.FollowUpsFailed != 3 {
+		t.Errorf("FollowUpsFailed = %d, want 3", a.FollowUpsFailed)
+	}
+}
+
+func TestCycleStats_Summary_PartialFailures(t *testing.T) {
+	stats := &CycleStats{
+		IssuesImportFailed: 2,
+		FollowUpsFailed:    1,
+		Items: []ItemResult{
+			{Title: "Task A", Status: "done"},
+		},
+		PRsCreated: 1,
+	}
+
+	got := stats.Summary()
+	if !strings.Contains(got, "2 issue imports failed") {
+		t.Errorf("Summary() missing '2 issue imports failed'\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "1 follow-up failed") {
+		t.Errorf("Summary() missing '1 follow-up failed'\ngot:\n%s", got)
+	}
+}
+
+func TestCycleStats_Summary_PartialFailures_Singular(t *testing.T) {
+	stats := &CycleStats{
+		IssuesImportFailed: 1,
+		Items: []ItemResult{
+			{Title: "Task A", Status: "done"},
+		},
+		PRsCreated: 1,
+	}
+
+	got := stats.Summary()
+	if !strings.Contains(got, "1 issue import failed") {
+		t.Errorf("Summary() missing '1 issue import failed'\ngot:\n%s", got)
+	}
+	// Should not say "imports" (plural) for count of 1
+	if strings.Contains(got, "issue imports failed") {
+		t.Errorf("Summary() should use singular 'import' for count 1\ngot:\n%s", got)
+	}
+}
+
+func TestCycleStats_Summary_PartialFailuresOmittedWhenZero(t *testing.T) {
+	stats := &CycleStats{
+		Items: []ItemResult{
+			{Title: "Task A", Status: "done"},
+		},
+		PRsCreated: 1,
+	}
+
+	got := stats.Summary()
+	if strings.Contains(got, "import") {
+		t.Errorf("Summary() should not mention imports when zero\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "follow-up") {
+		t.Errorf("Summary() should not mention follow-ups when zero\ngot:\n%s", got)
+	}
+}

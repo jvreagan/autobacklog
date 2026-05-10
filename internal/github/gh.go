@@ -12,15 +12,18 @@ import (
 	"time"
 )
 
-// runGH executes a gh CLI command with retry on rate-limit errors.
+// runGH executes a gh CLI command with retry on rate-limit and transient errors.
 // Returns stdout output. Retries up to 3 times with 1s/2s/4s backoff.
+// Each invocation has a 2-minute safety-net timeout.
 func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string) (string, error) {
 	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 
 	Stats.RecordCall()
 
 	for attempt := 0; ; attempt++ {
-		cmd := exec.CommandContext(ctx, "gh", args...)
+		callCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+
+		cmd := exec.CommandContext(callCtx, "gh", args...)
 		cmd.Dir = workDir
 		cmd.Env = ghEnv()
 
@@ -29,12 +32,14 @@ func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string
 		cmd.Stderr = &stderr
 
 		err := cmd.Run()
+		cancel()
 		if err == nil {
 			return strings.TrimSpace(stdout.String()), nil
 		}
 
 		errMsg := stderr.String()
-		if !isRateLimited(errMsg) || attempt >= len(backoffs) {
+		retryable := isRateLimited(errMsg) || isTransientError(errMsg)
+		if !retryable || attempt >= len(backoffs) {
 			Stats.RecordFailure()
 			return "", fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, errMsg)
 		}
@@ -46,7 +51,11 @@ func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string
 			backoff = hint
 		}
 
-		log.Warn("rate limited by GitHub, retrying",
+		reason := "rate limited by GitHub"
+		if isTransientError(errMsg) {
+			reason = "transient error"
+		}
+		log.Warn(reason+", retrying",
 			"attempt", attempt+1, "backoff", backoff, "args", args)
 
 		select {
@@ -71,6 +80,17 @@ func parseRetryAfter(stderr string) time.Duration {
 		return 0
 	}
 	return time.Duration(n) * time.Second
+}
+
+// isTransientError returns true if the error output indicates a transient network error
+// that is worth retrying (connection reset, timeout, DNS failure, etc.).
+func isTransientError(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "timed out") ||
+		strings.Contains(lower, "eof") ||
+		strings.Contains(lower, "could not resolve")
 }
 
 // isRateLimited returns true if the error output indicates a GitHub API rate limit.

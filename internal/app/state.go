@@ -108,8 +108,10 @@ type CycleStats struct {
 	PRsCreated       int
 	PRsAutoMerged    int
 	PRsReconciled    int
-	PRsFollowedUp   int
-	TestFailures     int
+	PRsFollowedUp      int
+	IssuesImportFailed int
+	FollowUpsFailed    int
+	TestFailures       int
 	TotalCost          float64
 	Errors             []error
 	Items              []ItemResult
@@ -135,6 +137,8 @@ func (s *CycleStats) Merge(other *CycleStats) {
 	s.PRsAutoMerged += other.PRsAutoMerged
 	s.PRsReconciled += other.PRsReconciled
 	s.PRsFollowedUp += other.PRsFollowedUp
+	s.IssuesImportFailed += other.IssuesImportFailed
+	s.FollowUpsFailed += other.FollowUpsFailed
 	s.TestFailures += other.TestFailures
 	s.TotalCost += other.TotalCost
 	s.Errors = append(s.Errors, other.Errors...)
@@ -226,6 +230,20 @@ func (s *CycleStats) Summary() string {
 			noun = "PR"
 		}
 		parts = append(parts, fmt.Sprintf("%d %s followed up", s.PRsFollowedUp, noun))
+	}
+	if s.IssuesImportFailed > 0 {
+		noun := "issue imports"
+		if s.IssuesImportFailed == 1 {
+			noun = "issue import"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s failed", s.IssuesImportFailed, noun))
+	}
+	if s.FollowUpsFailed > 0 {
+		noun := "follow-ups"
+		if s.FollowUpsFailed == 1 {
+			noun = "follow-up"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s failed", s.FollowUpsFailed, noun))
 	}
 
 	var b strings.Builder
