@@ -39,13 +39,18 @@ echo '{"result":"[{\"title\":\"Fix bug\",\"description\":\"desc\",\"file_path\":
 	c := newStubClient(t, "claude", 30*time.Second)
 	ctx := context.Background()
 
-	output, err := c.Run(ctx, t.TempDir(), "review the codebase")
+	output, cost, err := c.Run(ctx, t.TempDir(), "review the codebase")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
 	if !strings.Contains(output, "Fix bug") {
 		t.Errorf("output should contain 'Fix bug', got: %s", output)
+	}
+
+	// Cost should be returned on the stack
+	if cost < 0.03 {
+		t.Errorf("returned cost = %.4f, want >= 0.03", cost)
 	}
 
 	// Budget should have recorded the cost
@@ -61,7 +66,7 @@ func TestClient_RunPrint_Integration(t *testing.T) {
 	c := newStubClient(t, "claude", 30*time.Second)
 	ctx := context.Background()
 
-	output, err := c.RunPrint(ctx, t.TempDir(), "implement changes")
+	output, _, err := c.RunPrint(ctx, t.TempDir(), "implement changes")
 	if err != nil {
 		t.Fatalf("RunPrint: %v", err)
 	}
@@ -78,7 +83,7 @@ func TestClient_Run_BinaryFailure(t *testing.T) {
 	c := newStubClient(t, "claude", 30*time.Second)
 	ctx := context.Background()
 
-	_, err := c.Run(ctx, t.TempDir(), "do something")
+	_, _, err := c.Run(ctx, t.TempDir(), "do something")
 	if err == nil {
 		t.Fatal("expected error from failing binary")
 	}
@@ -94,7 +99,7 @@ func TestClient_Run_Timeout(t *testing.T) {
 	c := newStubClient(t, "claude", 500*time.Millisecond)
 	ctx := context.Background()
 
-	_, err := c.Run(ctx, t.TempDir(), "slow prompt")
+	_, _, err := c.Run(ctx, t.TempDir(), "slow prompt")
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -116,7 +121,7 @@ echo "line 3"
 	c.SetOutputWriters(&stdoutBuf, &bytes.Buffer{})
 	ctx := context.Background()
 
-	_, err := c.RunPrint(ctx, t.TempDir(), "stream test")
+	_, _, err := c.RunPrint(ctx, t.TempDir(), "stream test")
 	if err != nil {
 		t.Fatalf("RunPrint: %v", err)
 	}

@@ -2,6 +2,8 @@ package claude
 
 import (
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -185,5 +187,100 @@ func TestBudget_BurnRateExceeded_AboveThreshold(t *testing.T) {
 	// Rate = $40 / 0.5hr = $80/hr, limit is $10/hr
 	if !b.BurnRateExceeded(10.0) {
 		t.Errorf("BurnRateExceeded(10.0) = false, but rate is $80/hr")
+	}
+}
+
+func TestBudget_Reserve(t *testing.T) {
+	b := NewBudget(10.0)
+
+	if !b.Reserve(5.0) {
+		t.Error("Reserve(5) should succeed with budget=10")
+	}
+	if b.Remaining() != 5.0 {
+		t.Errorf("Remaining() = %f, want 5.0", b.Remaining())
+	}
+
+	if !b.Reserve(5.0) {
+		t.Error("Reserve(5) should succeed with remaining=5")
+	}
+	if b.Remaining() != 0.0 {
+		t.Errorf("Remaining() = %f, want 0.0", b.Remaining())
+	}
+
+	if b.Reserve(0.01) {
+		t.Error("Reserve(0.01) should fail with remaining=0")
+	}
+}
+
+func TestBudget_Refund(t *testing.T) {
+	b := NewBudget(10.0)
+	b.Reserve(8.0)
+
+	b.Refund(3.0)
+	if b.Remaining() != 5.0 {
+		t.Errorf("Remaining() = %f, want 5.0 after refund", b.Remaining())
+	}
+
+	// Refund more than spent — clamps to 0
+	b.Refund(100.0)
+	if b.Spent() != 0 {
+		t.Errorf("Spent() = %f, want 0 after over-refund", b.Spent())
+	}
+}
+
+func TestBudget_Adjust(t *testing.T) {
+	b := NewBudget(100.0)
+	b.Reserve(10.0) // spent = 10
+
+	// Actual cost was 3.0 — should give back 7.0
+	b.Adjust(10.0, 3.0)
+	if b.Spent() != 3.0 {
+		t.Errorf("Spent() = %f, want 3.0", b.Spent())
+	}
+	if b.LastCost() != 3.0 {
+		t.Errorf("LastCost() = %f, want 3.0", b.LastCost())
+	}
+	if b.Invocations() != 1 {
+		t.Errorf("Invocations() = %d, want 1", b.Invocations())
+	}
+
+	// Negative actual is treated as 0
+	b.Reserve(10.0) // spent = 13
+	b.Adjust(10.0, -5.0)
+	if b.Spent() != 3.0 {
+		t.Errorf("Spent() = %f, want 3.0 after negative actual", b.Spent())
+	}
+	if b.LastCost() != 0 {
+		t.Errorf("LastCost() = %f, want 0 after negative actual", b.LastCost())
+	}
+	if b.Invocations() != 2 {
+		t.Errorf("Invocations() = %d, want 2", b.Invocations())
+	}
+}
+
+func TestBudget_Reserve_Concurrent(t *testing.T) {
+	b := NewBudget(50.0)
+	const goroutines = 100
+	const amount = 5.0
+
+	var succeeded int64
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			if b.Reserve(amount) {
+				atomic.AddInt64(&succeeded, 1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if succeeded != 10 {
+		t.Errorf("succeeded = %d, want 10 (budget=50, amount=5)", succeeded)
+	}
+	if b.Remaining() != 0 {
+		t.Errorf("Remaining() = %f, want 0", b.Remaining())
 	}
 }

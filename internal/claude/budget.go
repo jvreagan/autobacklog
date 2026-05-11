@@ -101,6 +101,49 @@ func (b *Budget) BurnRateExceeded(maxRate float64) bool {
 	return b.BurnRate() > maxRate
 }
 
+// Reserve atomically checks and debits amount from the budget.
+// Returns true if the reservation succeeded. Does not increment invocations —
+// that is done by Adjust after the invocation completes.
+func (b *Budget) Reserve(amount float64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.spent+amount > b.maxTotal {
+		return false
+	}
+	b.spent += amount
+	return true
+}
+
+// Refund returns a previously reserved amount back to the budget.
+// Clamps spent to zero to avoid underflow from rounding.
+func (b *Budget) Refund(amount float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.spent -= amount
+	if b.spent < 0 {
+		b.spent = 0
+	}
+}
+
+// Adjust corrects the budget after an invocation completes.
+// It adjusts spent by (actual - reserved), sets lastCost, and increments invocations.
+func (b *Budget) Adjust(reserved, actual float64) {
+	if actual < 0 {
+		actual = 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.spent += actual - reserved
+	if b.spent < 0 {
+		b.spent = 0
+	}
+	b.lastCost = actual
+	if b.invocations == 0 {
+		b.firstRecordAt = b.now()
+	}
+	b.invocations++
+}
+
 // String returns a human-readable budget status.
 // Handles singular/plural for "invocation(s)" (#201).
 func (b *Budget) String() string {

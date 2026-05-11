@@ -24,8 +24,8 @@ type Repository interface {
 
 // AIClient abstracts the Claude CLI client for testability.
 type AIClient interface {
-	Run(ctx context.Context, workDir, prompt string) (string, error)
-	RunPrint(ctx context.Context, workDir, prompt string) (string, error)
+	Run(ctx context.Context, workDir, prompt string) (string, float64, error)
+	RunPrint(ctx context.Context, workDir, prompt string) (string, float64, error)
 	Budget() *claude.Budget
 }
 

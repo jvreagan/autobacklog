@@ -66,46 +66,53 @@ func (c *Client) buildArgs(prompt string, jsonOutput bool) []string {
 }
 
 // Run invokes the Claude CLI with the given prompt in the given working directory.
-// Returns the raw output string and any error.
-func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, error) {
-	output, err := c.execute(ctx, workDir, prompt, true)
+// Returns the raw output string, the actual cost, and any error.
+func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, float64, error) {
+	reserved := c.cfg.MaxBudgetPerCall
+	output, err := c.execute(ctx, workDir, prompt, true, reserved)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
-	// Try to extract cost from output and record it
+	// Try to extract cost from output and adjust reservation to actual
 	resp, parseErr := parseClaudeResponse(output)
+	var actual float64
 	if parseErr == nil && resp.Cost.Total > 0 {
-		c.budget.Record(resp.Cost.Total)
-		c.log.Info("claude invocation complete", "cost", fmt.Sprintf("$%.4f", resp.Cost.Total), "budget_status", c.budget.String())
+		actual = resp.Cost.Total
+		c.budget.Adjust(reserved, actual)
+		c.log.Info("claude invocation complete", "cost", fmt.Sprintf("$%.4f", actual), "budget_status", c.budget.String())
 	} else {
 		// #153: record a smaller fallback instead of MaxBudgetPerCall
-		fallback := c.cfg.MaxBudgetPerCall * 0.1
-		c.budget.Record(fallback)
-		c.log.Warn("could not parse cost from output, recording conservative estimate", "fallback", fmt.Sprintf("$%.4f", fallback))
+		actual = c.cfg.MaxBudgetPerCall * 0.1
+		c.budget.Adjust(reserved, actual)
+		c.log.Warn("could not parse cost from output, recording conservative estimate", "fallback", fmt.Sprintf("$%.4f", actual))
 	}
 
-	return output, nil
+	return output, actual, nil
 }
 
 // RunPrint invokes Claude in print-only mode (no JSON output) for implementation tasks.
-func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, error) {
-	output, err := c.execute(ctx, workDir, prompt, false)
+// Returns the output, the recorded cost, and any error.
+func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, float64, error) {
+	reserved := c.cfg.MaxBudgetPerCall
+	output, err := c.execute(ctx, workDir, prompt, false, reserved)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
-	// Conservative budget recording for non-JSON mode
-	c.budget.Record(c.cfg.MaxBudgetPerCall)
+	// Conservative budget recording for non-JSON mode — assume full reservation
+	c.budget.Adjust(reserved, reserved)
 
-	return output, nil
+	return output, reserved, nil
 }
 
 // execute is the shared implementation for Run and RunPrint. When jsonOutput is
 // true, stdout is captured only (for JSON parsing); when false, stdout is also
 // streamed to the terminal so the user sees Claude's progress.
-func (c *Client) execute(ctx context.Context, workDir, prompt string, jsonOutput bool) (string, error) {
-	if !c.budget.CanSpend(c.cfg.MaxBudgetPerCall) {
+// The reserved parameter is the amount already debited from the budget via Reserve.
+// On failure, the reservation is refunded.
+func (c *Client) execute(ctx context.Context, workDir, prompt string, jsonOutput bool, reserved float64) (string, error) {
+	if !c.budget.Reserve(reserved) {
 		return "", fmt.Errorf("budget exceeded: %s", c.budget.String())
 	}
 
@@ -139,6 +146,7 @@ func (c *Client) execute(ctx context.Context, workDir, prompt string, jsonOutput
 
 	err := cmd.Run()
 	if err != nil {
+		c.budget.Refund(reserved)
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("claude timed out after %s: %w", c.cfg.Timeout, ctx.Err())
 		}

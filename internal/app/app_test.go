@@ -98,7 +98,7 @@ func newMockAIClient(maxBudget float64) *mockAIClient {
 	return &mockAIClient{budget: claude.NewBudget(maxBudget)}
 }
 
-func (m *mockAIClient) Run(_ context.Context, _, _ string) (string, error) {
+func (m *mockAIClient) Run(_ context.Context, _, _ string) (string, float64, error) {
 	m.runCalls++
 	idx := m.runIdx
 	m.runIdx++
@@ -110,15 +110,20 @@ func (m *mockAIClient) Run(_ context.Context, _, _ string) (string, error) {
 	if idx < len(m.runErrors) {
 		err = m.runErrors[idx]
 	}
-	return out, err
+	cost := m.costPerCall
+	if cost > 0 {
+		m.budget.Record(cost)
+	}
+	return out, cost, err
 }
 
-func (m *mockAIClient) RunPrint(_ context.Context, _, _ string) (string, error) {
+func (m *mockAIClient) RunPrint(_ context.Context, _, _ string) (string, float64, error) {
 	m.runPrintCalls++
 	idx := m.runPrintIdx
 	m.runPrintIdx++
-	if m.costPerCall > 0 {
-		m.budget.Record(m.costPerCall)
+	cost := m.costPerCall
+	if cost > 0 {
+		m.budget.Record(cost)
 	}
 	var out string
 	var err error
@@ -128,7 +133,7 @@ func (m *mockAIClient) RunPrint(_ context.Context, _, _ string) (string, error) 
 	if idx < len(m.runPrintErrors) {
 		err = m.runPrintErrors[idx]
 	}
-	return out, err
+	return out, cost, err
 }
 
 func (m *mockAIClient) Budget() *claude.Budget { return m.budget }

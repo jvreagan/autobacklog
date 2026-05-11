@@ -130,7 +130,7 @@ func TestClient_Run_BudgetExceeded(t *testing.T) {
 	// Exhaust budget
 	c.budget.Record(49.0)
 
-	_, err := c.Run(context.Background(), "/tmp", "prompt")
+	_, _, err := c.Run(context.Background(), "/tmp", "prompt")
 	if err == nil {
 		t.Fatal("expected budget exceeded error")
 	}
@@ -143,7 +143,7 @@ func TestClient_RunPrint_BudgetExceeded(t *testing.T) {
 	c := newTestClient(false)
 	c.budget.Record(49.0)
 
-	_, err := c.RunPrint(context.Background(), "/tmp", "prompt")
+	_, _, err := c.RunPrint(context.Background(), "/tmp", "prompt")
 	if err == nil {
 		t.Fatal("expected budget exceeded error")
 	}

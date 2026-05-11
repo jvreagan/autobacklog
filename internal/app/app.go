@@ -394,10 +394,9 @@ func (a *App) recoverStuckItems(ctx context.Context) {
 	}
 }
 
-// recordCost persists the cost of the last Claude invocation. Errors are
+// recordCost persists the cost of a Claude invocation. Errors are
 // logged as warnings since cost tracking is non-critical.
-func (a *App) recordCost(ctx context.Context, promptType, itemID string) {
-	cost := a.claude.Budget().LastCost()
+func (a *App) recordCost(ctx context.Context, promptType, itemID string, cost float64) {
 	if cost <= 0 {
 		return
 	}
@@ -530,8 +529,8 @@ func (a *App) tryFollowUp(ctx context.Context, item *backlog.Item, stats *CycleS
 	}
 
 	prompt := claude.AddressReviewPrompt(item.Title, feedback.String())
-	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
-	a.recordCost(ctx, "follow_up", item.ID)
+	_, cost, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "follow_up", item.ID, cost)
 	if err != nil {
 		// Still update hash to prevent re-processing the same reviews
 		item.LastReviewHash = hash
@@ -673,8 +672,8 @@ func (a *App) doReview(ctx context.Context, stats *CycleStats) error {
 	}
 
 	a.log.Info("invoking Claude to review codebase", "model", a.cfg.Claude.Model, "budget_per_call", a.cfg.Claude.MaxBudgetPerCall)
-	output, err := a.claude.Run(ctx, a.repo.WorkDir(), claude.ReviewPrompt())
-	a.recordCost(ctx, "review", "")
+	output, cost, err := a.claude.Run(ctx, a.repo.WorkDir(), claude.ReviewPrompt())
+	a.recordCost(ctx, "review", "", cost)
 	if err != nil {
 		return fmt.Errorf("review: %w", err)
 	}
@@ -960,8 +959,8 @@ func (a *App) doImplementBatch(ctx context.Context, stats *CycleStats) error {
 
 	// Invoke Claude with batch prompt
 	prompt := claude.BatchImplementPrompt(items)
-	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
-	a.recordCost(ctx, "batch_implement", "")
+	_, cost, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "batch_implement", "", cost)
 	if err != nil {
 		a.cleanupBranch(ctx, branchName)
 		for _, item := range items {
@@ -1255,8 +1254,8 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 	// Invoke Claude to implement
 	a.log.Info("invoking Claude to implement changes", "title", item.Title)
 	prompt := claude.ImplementPrompt(item)
-	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
-	a.recordCost(ctx, "implement", item.ID)
+	_, cost, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "implement", item.ID, cost)
 	if err != nil {
 		a.cleanupBranch(ctx, branchName)
 		// #124: reset status on Claude failure
@@ -1457,8 +1456,8 @@ func (a *App) runTestsWithRetry(ctx context.Context, item *backlog.Item, stats *
 
 			// Ask Claude to fix the tests
 			fixPrompt := claude.FixTestPrompt(result.Output)
-			_, err = a.claude.RunPrint(ctx, workDir, fixPrompt)
-			a.recordCost(ctx, "fix_test", item.ID)
+			_, fixCost, err := a.claude.RunPrint(ctx, workDir, fixPrompt)
+			a.recordCost(ctx, "fix_test", item.ID, fixCost)
 			if err != nil {
 				return "", fmt.Errorf("claude fix attempt %d: %w", attempt, err)
 			}
@@ -1497,8 +1496,8 @@ func (a *App) doDocument(ctx context.Context, stats *CycleStats) error {
 	if prompt == "" {
 		return nil
 	}
-	_, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
-	a.recordCost(ctx, "document", "")
+	_, cost, err := a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
+	a.recordCost(ctx, "document", "", cost)
 	if err != nil {
 		a.log.Warn("documentation update failed", "error", err)
 		// Non-fatal
