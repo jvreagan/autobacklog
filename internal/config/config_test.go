@@ -68,6 +68,15 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Daemon.Interval != time.Hour {
 		t.Errorf("default interval = %v, want 1h", cfg.Daemon.Interval)
 	}
+	if cfg.GitHub.GHTimeout != 2*time.Minute {
+		t.Errorf("default gh_timeout = %v, want 2m", cfg.GitHub.GHTimeout)
+	}
+	if cfg.GitHub.GHMaxRetries != 3 {
+		t.Errorf("default gh_max_retries = %d, want 3", cfg.GitHub.GHMaxRetries)
+	}
+	if cfg.Repo.GitMaxRetries != 3 {
+		t.Errorf("default git_max_retries = %d, want 3", cfg.Repo.GitMaxRetries)
+	}
 }
 
 func TestApplyDefaultsPreservesExisting(t *testing.T) {
@@ -184,6 +193,32 @@ func TestValidate(t *testing.T) {
 				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
 				Logging: LoggingConfig{Level: "info", Format: "text"},
 				WebUI:   WebUIConfig{Port: 65536},
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative gh_max_retries",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				GitHub:  GitHubConfig{GHMaxRetries: -1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative gh_timeout",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com"}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
+				GitHub:  GitHubConfig{GHTimeout: -1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative git_max_retries",
+			cfg: Config{
+				Repo: RepoConfig{URL: "https://example.com", GitMaxRetries: -1}, Mode: "oneshot", HelperMode: "buildbacklog",
+				Logging: LoggingConfig{Level: "info", Format: "text"},
 			},
 			wantErr: true,
 		},

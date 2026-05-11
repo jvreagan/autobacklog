@@ -3,13 +3,32 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestMakeGitBackoffs(t *testing.T) {
+	backoffs := makeGitBackoffs(3)
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+	if len(backoffs) != len(want) {
+		t.Fatalf("makeGitBackoffs(3) returned %d entries, want %d", len(backoffs), len(want))
+	}
+	for i, b := range backoffs {
+		if b != want[i] {
+			t.Errorf("backoffs[%d] = %v, want %v", i, b, want[i])
+		}
+	}
+
+	if bs := makeGitBackoffs(0); len(bs) != 0 {
+		t.Errorf("makeGitBackoffs(0) returned %d entries, want 0", len(bs))
+	}
+}
 
 func TestIsGitTransient(t *testing.T) {
 	tests := []struct {
@@ -23,6 +42,9 @@ func TestIsGitTransient(t *testing.T) {
 		{"could not resolve host", errors.New("Could not resolve host: github.com"), true},
 		{"ssl error", errors.New("SSL_ERROR_SYSCALL"), true},
 		{"unable to access", errors.New("fatal: unable to access 'https://github.com/...'"), true},
+		{"eof", errors.New("fatal: the remote end hung up unexpectedly, EOF"), true},
+		{"context deadline exceeded", context.DeadlineExceeded, true},
+		{"wrapped deadline exceeded", fmt.Errorf("git clone: %w", context.DeadlineExceeded), true},
 		{"normal error", errors.New("fatal: not a git repository"), false},
 		{"nil error", nil, false},
 	}
@@ -40,7 +62,7 @@ func TestIsGitTransient(t *testing.T) {
 // somehow appears in command arguments, it is scrubbed from error messages.
 func TestRunRedactsPAT(t *testing.T) {
 	const pat = "ghp_supersecrettoken"
-	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), pat, slog.Default())
+	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), pat, 3, slog.Default())
 
 	// Run a command that fails and includes the PAT in its arguments.
 	err := r.run(context.Background(), "", "git", "clone", "https://"+pat+"@github.com/user/repo.git", "/nonexistent/path")
@@ -56,7 +78,7 @@ func TestRunRedactsPAT(t *testing.T) {
 }
 
 func TestRunNoPATNoRedaction(t *testing.T) {
-	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), "", slog.Default())
+	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), "", 3, slog.Default())
 
 	err := r.run(context.Background(), "", "git", "clone", "https://github.com/user/nonexistent.git", "/nonexistent/path")
 	if err == nil {
@@ -71,7 +93,7 @@ func TestRunNoPATNoRedaction(t *testing.T) {
 // arguments. The PAT travels only via the GIT_PAT environment variable.
 func TestRunGitPATNotInArgs(t *testing.T) {
 	const pat = "ghp_supersecrettoken"
-	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), pat, slog.Default())
+	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), pat, 3, slog.Default())
 
 	err := r.runGit(context.Background(), "", "clone", "https://github.com/user/repo.git", "/nonexistent/path")
 	if err == nil {
@@ -132,7 +154,7 @@ func runCmd(t *testing.T, dir string, name string, args ...string) {
 func TestCloneOrPull_Clone(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -153,7 +175,7 @@ func TestCloneOrPull_Clone(t *testing.T) {
 func TestCloneOrPull_Pull(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 
@@ -193,7 +215,7 @@ func TestCloneOrPull_Pull(t *testing.T) {
 func TestCreateBranch(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -225,7 +247,7 @@ func TestCreateBranch(t *testing.T) {
 func TestCreateBranch_AlreadyExists(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -267,7 +289,7 @@ func TestCreateBranch_AlreadyExists(t *testing.T) {
 func TestHasChanges_Integration(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -299,7 +321,7 @@ func TestHasChanges_Integration(t *testing.T) {
 func TestCheckoutBranch(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -331,7 +353,7 @@ func TestCheckoutBranch(t *testing.T) {
 func TestDeleteBranch(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -368,7 +390,7 @@ func TestDeleteBranch(t *testing.T) {
 func TestPush(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -412,7 +434,7 @@ func TestPush(t *testing.T) {
 func TestRevertToClean(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {
@@ -452,7 +474,7 @@ func TestRevertToClean(t *testing.T) {
 func TestStageAllAndCommit(t *testing.T) {
 	bare := initBareRepo(t)
 	workDir := filepath.Join(t.TempDir(), "clone-target")
-	r := NewRepo(bare, "main", workDir, "", slog.Default())
+	r := NewRepo(bare, "main", workDir, "", 3, slog.Default())
 
 	ctx := context.Background()
 	if err := r.CloneOrPull(ctx); err != nil {

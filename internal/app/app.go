@@ -92,7 +92,8 @@ func New(cfg *config.Config, store backlog.Store, notifier notify.Notifier, log 
 		log.Warn("no GitHub PAT configured", "error", err)
 	}
 
-	repo := git.NewRepo(cfg.Repo.URL, cfg.Repo.Branch, cfg.Repo.WorkDir, pat, log)
+	gh.Configure(cfg.GitHub.GHTimeout, cfg.GitHub.GHMaxRetries)
+	repo := git.NewRepo(cfg.Repo.URL, cfg.Repo.Branch, cfg.Repo.WorkDir, pat, cfg.Repo.GitMaxRetries, log)
 	claudeClient := claude.NewClient(cfg.Claude, log)
 	testRunner := runner.NewRunner(log, cfg.Testing.Timeout)
 
@@ -476,39 +477,45 @@ func (a *App) doReconcile(ctx context.Context, stats *CycleStats) error {
 
 // followUpOnReview addresses PR review comments by invoking Claude and pushing a follow-up commit.
 func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *CycleStats) {
+	if err := a.tryFollowUp(ctx, item, stats); err != nil {
+		a.log.Warn("follow-up failed", "title", item.Title, "error", err)
+		stats.FollowUpsFailed++
+	}
+}
+
+// tryFollowUp contains the core follow-up logic. It returns an error for actual
+// failures (fetch, checkout, Claude, stage/commit/push) and nil for non-error
+// skips (no reviews, already addressed, limit reached, budget exceeded, success).
+func (a *App) tryFollowUp(ctx context.Context, item *backlog.Item, stats *CycleStats) error {
 	reviews, err := a.prCreator.FetchPRReviews(ctx, a.repo.WorkDir(), item.PRLink)
 	if err != nil {
-		a.log.Warn("failed to fetch PR reviews", "title", item.Title, "error", err)
-		stats.FollowUpsFailed++
-		return
+		return fmt.Errorf("fetching PR reviews: %w", err)
 	}
 
 	if len(reviews.Reviews) == 0 {
 		a.log.Debug("no reviews on PR", "title", item.Title)
-		return
+		return nil
 	}
 
 	hash := gh.ReviewsHash(reviews.Reviews)
 	if hash == item.LastReviewHash {
 		a.log.Debug("reviews already addressed", "title", item.Title, "hash", hash)
-		return
+		return nil
 	}
 
 	if a.cfg.GitHub.MaxFollowUps > 0 && item.FollowUpCount >= a.cfg.GitHub.MaxFollowUps {
 		a.log.Warn("follow-up limit reached, skipping", "title", item.Title, "follow_up_count", item.FollowUpCount, "max", a.cfg.GitHub.MaxFollowUps)
-		return
+		return nil
 	}
 
 	if !a.claude.Budget().CanSpend(a.cfg.Claude.MaxBudgetPerCall) {
 		a.log.Warn("budget exceeded, skipping PR follow-up", "title", item.Title)
-		return
+		return nil
 	}
 
 	// Checkout the PR's head branch
 	if err := a.repo.CheckoutBranch(ctx, reviews.HeadBranch); err != nil {
-		a.log.Warn("failed to checkout PR branch for follow-up", "branch", reviews.HeadBranch, "error", err)
-		stats.FollowUpsFailed++
-		return
+		return fmt.Errorf("checking out PR branch %s: %w", reviews.HeadBranch, err)
 	}
 	defer func() {
 		if coErr := a.repo.CheckoutBranch(ctx, a.cfg.Repo.Branch); coErr != nil {
@@ -526,40 +533,30 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 	_, err = a.claude.RunPrint(ctx, a.repo.WorkDir(), prompt)
 	a.recordCost(ctx, "follow_up", item.ID)
 	if err != nil {
-		a.log.Warn("Claude failed to address review", "title", item.Title, "error", err)
-		stats.FollowUpsFailed++
 		// Still update hash to prevent re-processing the same reviews
 		item.LastReviewHash = hash
 		if updateErr := a.store.Update(ctx, item); updateErr != nil {
 			a.log.Error("failed to update review hash after Claude error", "error", updateErr)
 		}
-		return
+		return fmt.Errorf("Claude addressing review: %w", err)
 	}
 
 	// Check if Claude made changes
 	hasChanges, err := a.repo.HasChanges(ctx)
 	if err != nil {
-		a.log.Warn("failed to check for changes after follow-up", "error", err)
-		stats.FollowUpsFailed++
-		return
+		return fmt.Errorf("checking for changes: %w", err)
 	}
 
 	if hasChanges {
 		if err := a.repo.StageAll(ctx); err != nil {
-			a.log.Warn("failed to stage follow-up changes", "error", err)
-			stats.FollowUpsFailed++
-			return
+			return fmt.Errorf("staging follow-up changes: %w", err)
 		}
 		commitMsg := fmt.Sprintf("autobacklog: address review comments for %s", item.Title)
 		if err := a.repo.Commit(ctx, commitMsg); err != nil {
-			a.log.Warn("failed to commit follow-up changes", "error", err)
-			stats.FollowUpsFailed++
-			return
+			return fmt.Errorf("committing follow-up changes: %w", err)
 		}
 		if err := a.repo.Push(ctx, reviews.HeadBranch); err != nil {
-			a.log.Warn("failed to push follow-up changes", "error", err)
-			stats.FollowUpsFailed++
-			return
+			return fmt.Errorf("pushing follow-up changes: %w", err)
 		}
 		a.log.Info("pushed follow-up commit addressing reviews", "title", item.Title, "pr", item.PRLink)
 		stats.PRsFollowedUp++
@@ -573,6 +570,7 @@ func (a *App) followUpOnReview(ctx context.Context, item *backlog.Item, stats *C
 	if err := a.store.Update(ctx, item); err != nil {
 		a.log.Error("failed to update review hash", "title", item.Title, "error", err)
 	}
+	return nil
 }
 
 func (a *App) doImportIssues(ctx context.Context, stats *CycleStats) error {

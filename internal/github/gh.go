@@ -9,19 +9,59 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
+// retryPolicy holds configurable retry parameters for gh CLI invocations.
+type retryPolicy struct {
+	mu         sync.Mutex
+	timeout    time.Duration
+	maxRetries int
+}
+
+var policy = retryPolicy{timeout: 2 * time.Minute, maxRetries: 3}
+
+// Configure sets the retry policy for gh CLI invocations.
+// Zero values are ignored (the existing default is preserved).
+// Safe for concurrent use.
+func Configure(timeout time.Duration, maxRetries int) {
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	if timeout > 0 {
+		policy.timeout = timeout
+	}
+	if maxRetries > 0 {
+		policy.maxRetries = maxRetries
+	}
+}
+
+// makeBackoffs generates an exponential backoff slice: 1s, 2s, 4s, 8s...
+func makeBackoffs(n int) []time.Duration {
+	backoffs := make([]time.Duration, n)
+	d := 1 * time.Second
+	for i := range backoffs {
+		backoffs[i] = d
+		d *= 2
+	}
+	return backoffs
+}
+
 // runGH executes a gh CLI command with retry on rate-limit and transient errors.
-// Returns stdout output. Retries up to 3 times with 1s/2s/4s backoff.
-// Each invocation has a 2-minute safety-net timeout.
+// Returns stdout output. Retries up to maxRetries times with exponential backoff.
+// Each invocation has a configurable safety-net timeout (default 2m).
 func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string) (string, error) {
-	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+	policy.mu.Lock()
+	timeout := policy.timeout
+	maxRetries := policy.maxRetries
+	policy.mu.Unlock()
+
+	backoffs := makeBackoffs(maxRetries)
 
 	Stats.RecordCall()
 
 	for attempt := 0; ; attempt++ {
-		callCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
 
 		cmd := exec.CommandContext(callCtx, "gh", args...)
 		cmd.Dir = workDir
@@ -38,7 +78,9 @@ func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string
 		}
 
 		errMsg := stderr.String()
-		retryable := isRateLimited(errMsg) || isTransientError(errMsg)
+		// Detect per-call timeout (distinct from parent context cancellation)
+		callTimedOut := callCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
+		retryable := callTimedOut || isRateLimited(errMsg) || isTransientError(errMsg)
 		if !retryable || attempt >= len(backoffs) {
 			Stats.RecordFailure()
 			return "", fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, errMsg)
@@ -52,7 +94,9 @@ func runGH(ctx context.Context, workDir string, log *slog.Logger, args ...string
 		}
 
 		reason := "rate limited by GitHub"
-		if isTransientError(errMsg) {
+		if callTimedOut {
+			reason = "call timed out"
+		} else if isTransientError(errMsg) {
 			reason = "transient error"
 		}
 		log.Warn(reason+", retrying",
@@ -90,7 +134,8 @@ func isTransientError(stderr string) bool {
 		strings.Contains(lower, "connection reset") ||
 		strings.Contains(lower, "timed out") ||
 		strings.Contains(lower, "eof") ||
-		strings.Contains(lower, "could not resolve")
+		strings.Contains(lower, "could not resolve") ||
+		strings.Contains(lower, "unable to access")
 }
 
 // isRateLimited returns true if the error output indicates a GitHub API rate limit.

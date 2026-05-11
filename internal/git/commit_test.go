@@ -29,7 +29,7 @@ func initTestRepo(t *testing.T) *Repo {
 		}
 	}
 
-	return NewRepo("", "main", dir, "", slog.Default())
+	return NewRepo("", "main", dir, "", 3, slog.Default())
 }
 
 func TestHasChanges_CleanRepo(t *testing.T) {
@@ -123,7 +123,7 @@ func TestRevertToClean_RevertsModified(t *testing.T) {
 }
 
 func TestWorkDir_ReturnsConfigured(t *testing.T) {
-	r := NewRepo("https://example.com", "main", "/some/path", "", slog.Default())
+	r := NewRepo("https://example.com", "main", "/some/path", "", 3, slog.Default())
 	if r.WorkDir() != "/some/path" {
 		t.Errorf("WorkDir() = %q, want /some/path", r.WorkDir())
 	}
@@ -159,7 +159,7 @@ func TestStageAll_StagesNewFile(t *testing.T) {
 // itself does not appear in the command arguments (only $GIT_PAT does).
 func TestRunGit_CredentialHelperInjected(t *testing.T) {
 	const pat = "ghp_token123"
-	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), pat, slog.Default())
+	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), pat, 3, slog.Default())
 
 	err := r.runGit(context.Background(), "", "ls-remote", "https://github.com/user/nonexistent99999.git")
 	// We expect a failure (repo doesn't exist), but the PAT must not leak.
@@ -171,7 +171,7 @@ func TestRunGit_CredentialHelperInjected(t *testing.T) {
 // TestRunGit_NoPATNoCred verifies that runGit does not inject credential
 // helper flags when no PAT is configured.
 func TestRunGit_NoPATNoCred(t *testing.T) {
-	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), "", slog.Default())
+	r := NewRepo("https://github.com/user/repo.git", "main", t.TempDir(), "", 3, slog.Default())
 
 	err := r.runGit(context.Background(), "", "version")
 	if err != nil {

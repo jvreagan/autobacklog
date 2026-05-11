@@ -23,17 +23,20 @@ type RepoConfig struct {
 	Branch         string `yaml:"branch"`           // Target branch, default "main"
 	WorkDir        string `yaml:"work_dir"`         // Local clone directory, default "/tmp/autobacklog"
 	PRBranchPrefix string `yaml:"pr_branch_prefix"` // Prefix for PR branches, default "autobacklog"
+	GitMaxRetries  int    `yaml:"git_max_retries"`  // Max retry attempts for git CLI, default 3
 }
 
 // GitHubConfig holds GitHub authentication and integration settings.
 type GitHubConfig struct {
-	PAT          string `yaml:"pat"`            // GitHub PAT (inline)
-	PATFile      string `yaml:"pat_file"`       // Path to file containing PAT
-	AutoMerge    bool   `yaml:"auto_merge"`     // Enable auto-merge after CI passes
-	CreateIssues bool   `yaml:"create_issues"`  // Create GitHub issues for new backlog items
-	IssueLabel   string `yaml:"issue_label"`    // Label for importing/creating issues, default "autobacklog"
-	PRFollowUp   bool   `yaml:"pr_follow_up"`   // Auto-address PR review comments
-	MaxFollowUps int    `yaml:"max_follow_ups"` // Max PR follow-up iterations per item (0 = unlimited)
+	PAT          string        `yaml:"pat"`            // GitHub PAT (inline)
+	PATFile      string        `yaml:"pat_file"`       // Path to file containing PAT
+	AutoMerge    bool          `yaml:"auto_merge"`     // Enable auto-merge after CI passes
+	CreateIssues bool          `yaml:"create_issues"`  // Create GitHub issues for new backlog items
+	IssueLabel   string        `yaml:"issue_label"`    // Label for importing/creating issues, default "autobacklog"
+	PRFollowUp   bool          `yaml:"pr_follow_up"`   // Auto-address PR review comments
+	MaxFollowUps int           `yaml:"max_follow_ups"` // Max PR follow-up iterations per item (0 = unlimited)
+	GHTimeout    time.Duration `yaml:"gh_timeout"`     // Per-invocation timeout for gh CLI, default 2m
+	GHMaxRetries int           `yaml:"gh_max_retries"` // Max retry attempts for gh CLI, default 3
 }
 
 // ClaudeConfig configures the Claude Code CLI integration.

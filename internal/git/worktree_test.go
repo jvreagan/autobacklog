@@ -17,7 +17,7 @@ func TestAddWorktree(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "clone")
 	log := slog.Default()
 
-	repo := NewRepo(bare, "main", workDir, "", log)
+	repo := NewRepo(bare, "main", workDir, "", 3, log)
 	ctx := context.Background()
 
 	if err := repo.CloneOrPull(ctx); err != nil {
@@ -40,7 +40,7 @@ func TestRemoveWorktree(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "clone")
 	log := slog.Default()
 
-	repo := NewRepo(bare, "main", workDir, "", log)
+	repo := NewRepo(bare, "main", workDir, "", 3, log)
 	ctx := context.Background()
 
 	if err := repo.CloneOrPull(ctx); err != nil {
@@ -64,7 +64,7 @@ func TestRemoveWorktree(t *testing.T) {
 
 func TestNewWorktreeRepo(t *testing.T) {
 	log := slog.Default()
-	repo := NewRepo("https://example.com/repo.git", "main", "/tmp/main", "secret", log)
+	repo := NewRepo("https://example.com/repo.git", "main", "/tmp/main", "secret", 3, log)
 
 	wtRepo := repo.NewWorktreeRepo("/tmp/worktree")
 	if wtRepo.WorkDir() != "/tmp/worktree" {

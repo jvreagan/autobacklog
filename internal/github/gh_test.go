@@ -46,6 +46,7 @@ func TestIsTransientError(t *testing.T) {
 		{"timed out", "net/http: request timed out", true},
 		{"eof", "unexpected EOF", true},
 		{"could not resolve", "Could not resolve host: api.github.com", true},
+		{"unable to access", "fatal: unable to access 'https://github.com/...'", true},
 		{"normal error", "HTTP 404: Not Found", false},
 		{"empty", "", false},
 		{"rate limit not transient", "API rate limit exceeded", false},
@@ -260,6 +261,53 @@ echo "success"
 	}
 	if Stats.Failures() != 0 {
 		t.Errorf("Stats.Failures() = %d, want 0", Stats.Failures())
+	}
+}
+
+func TestMakeBackoffs(t *testing.T) {
+	backoffs := makeBackoffs(4)
+	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+	if len(backoffs) != len(want) {
+		t.Fatalf("makeBackoffs(4) returned %d entries, want %d", len(backoffs), len(want))
+	}
+	for i, b := range backoffs {
+		if b != want[i] {
+			t.Errorf("backoffs[%d] = %v, want %v", i, b, want[i])
+		}
+	}
+
+	// Zero retries should return empty slice
+	if bs := makeBackoffs(0); len(bs) != 0 {
+		t.Errorf("makeBackoffs(0) returned %d entries, want 0", len(bs))
+	}
+}
+
+func TestRunGH_ConfigurableRetries(t *testing.T) {
+	resetStats(t)
+
+	// Save and restore the default policy
+	policy.mu.Lock()
+	origTimeout, origRetries := policy.timeout, policy.maxRetries
+	policy.mu.Unlock()
+	t.Cleanup(func() { Configure(origTimeout, origRetries) })
+
+	// Configure with maxRetries=1 — only 1 retry before giving up
+	Configure(2*time.Minute, 1)
+
+	binDir := testutil.StubBinDir(t)
+	testutil.WriteStubScript(t, binDir, "gh", `echo "HTTP 403: rate limit exceeded" >&2; exit 1`)
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	log := slog.Default()
+
+	_, err := runGH(ctx, workDir, log, "api", "/limited")
+	if err == nil {
+		t.Fatal("expected error after retries exhausted")
+	}
+	// With maxRetries=1, we expect exactly 1 retry
+	if Stats.Retries() != 1 {
+		t.Errorf("Stats.Retries() = %d, want 1", Stats.Retries())
 	}
 }
 

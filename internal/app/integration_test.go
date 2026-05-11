@@ -105,9 +105,12 @@ esac
 			Branch:         "main",
 			WorkDir:        workDir,
 			PRBranchPrefix: "autobacklog",
+			GitMaxRetries:  3,
 		},
 		GitHub: config.GitHubConfig{
-			IssueLabel: "autobacklog",
+			IssueLabel:   "autobacklog",
+			GHTimeout:    2 * time.Minute,
+			GHMaxRetries: 3,
 		},
 		Claude: config.ClaudeConfig{
 			Binary:           "claude",

@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -14,21 +15,24 @@ import (
 
 // Repo manages git operations on a working directory.
 type Repo struct {
-	url     string
-	branch  string
-	workDir string
-	pat     string
-	log     *slog.Logger
+	url        string
+	branch     string
+	workDir    string
+	pat        string
+	maxRetries int
+	log        *slog.Logger
 }
 
-// NewRepo creates a new Repo instance.
-func NewRepo(url, branch, workDir, pat string, log *slog.Logger) *Repo {
+// NewRepo creates a new Repo instance. maxRetries controls how many times
+// network-facing git commands are retried on transient errors (0 = no retries).
+func NewRepo(url, branch, workDir, pat string, maxRetries int, log *slog.Logger) *Repo {
 	return &Repo{
-		url:     url,
-		branch:  branch,
-		workDir: workDir,
-		pat:     pat,
-		log:     log,
+		url:        url,
+		branch:     branch,
+		workDir:    workDir,
+		pat:        pat,
+		maxRetries: maxRetries,
+		log:        log,
 	}
 }
 
@@ -91,19 +95,34 @@ func isGitTransient(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "connection reset") ||
 		strings.Contains(lower, "timed out") ||
 		strings.Contains(lower, "could not resolve host") ||
 		strings.Contains(lower, "ssl") ||
-		strings.Contains(lower, "unable to access")
+		strings.Contains(lower, "unable to access") ||
+		strings.Contains(lower, "eof")
+}
+
+// makeGitBackoffs generates an exponential backoff slice: 2s, 4s, 8s, 16s...
+func makeGitBackoffs(n int) []time.Duration {
+	backoffs := make([]time.Duration, n)
+	d := 2 * time.Second
+	for i := range backoffs {
+		backoffs[i] = d
+		d *= 2
+	}
+	return backoffs
 }
 
 // runGitRetry wraps runGit with retry logic for network-facing commands.
-// Retries up to 3 attempts with 2s/4s/8s backoff on transient errors.
+// Retries up to r.maxRetries attempts with exponential backoff on transient errors.
 func (r *Repo) runGitRetry(ctx context.Context, dir string, args ...string) error {
-	backoffs := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
+	backoffs := makeGitBackoffs(r.maxRetries)
 
 	var err error
 	for attempt := 0; ; attempt++ {

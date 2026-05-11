@@ -14,6 +14,7 @@ repo:
   branch: "main"
   work_dir: "/tmp/autobacklog/your-repo"
   pr_branch_prefix: "autobacklog"
+  # git_max_retries: 3                 # max retry attempts for git CLI
 
 # -----------------------------------------------------------------------------
 # GitHub Authentication
@@ -27,6 +28,8 @@ github:
   issue_label: "autobacklog"           # label for importing/creating issues
   pr_follow_up: false                  # auto-address PR review comments
   max_follow_ups: 3                    # max PR follow-up iterations per item
+  # gh_timeout: "2m"                   # per-invocation timeout for gh CLI
+  # gh_max_retries: 3                  # max retry attempts for gh CLI
 
 # -----------------------------------------------------------------------------
 # Claude Code CLI

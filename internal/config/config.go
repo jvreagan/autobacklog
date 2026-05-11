@@ -34,6 +34,8 @@ const (
 	DefaultSMTPPort        = 587
 	DefaultIssueLabel      = "autobacklog"
 	DefaultMaxFollowUps    = 3
+	DefaultGHMaxRetries    = 3
+	DefaultGitMaxRetries   = 3
 )
 
 var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -192,6 +194,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.GitHub.MaxFollowUps == 0 {
 		cfg.GitHub.MaxFollowUps = DefaultMaxFollowUps
 	}
+	if cfg.GitHub.GHTimeout == 0 {
+		cfg.GitHub.GHTimeout = 2 * time.Minute
+	}
+	if cfg.GitHub.GHMaxRetries == 0 {
+		cfg.GitHub.GHMaxRetries = DefaultGHMaxRetries
+	}
+	if cfg.Repo.GitMaxRetries == 0 {
+		cfg.Repo.GitMaxRetries = DefaultGitMaxRetries
+	}
 }
 
 // validQuietTime validates a "HH:MM" time string (#139).
@@ -267,6 +278,15 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Testing.MaxRetries < 0 {
 		return fmt.Errorf("testing.max_retries must be non-negative, got %d", cfg.Testing.MaxRetries)
+	}
+	if cfg.GitHub.GHMaxRetries < 0 {
+		return fmt.Errorf("github.gh_max_retries must be non-negative, got %d", cfg.GitHub.GHMaxRetries)
+	}
+	if cfg.GitHub.GHTimeout < 0 {
+		return fmt.Errorf("github.gh_timeout must be non-negative, got %v", cfg.GitHub.GHTimeout)
+	}
+	if cfg.Repo.GitMaxRetries < 0 {
+		return fmt.Errorf("repo.git_max_retries must be non-negative, got %d", cfg.Repo.GitMaxRetries)
 	}
 	if cfg.Notifications.SMTP.Port < 0 {
 		return fmt.Errorf("notifications.smtp.port must be non-negative, got %d", cfg.Notifications.SMTP.Port)

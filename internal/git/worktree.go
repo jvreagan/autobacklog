@@ -27,10 +27,11 @@ func (r *Repo) RemoveWorktree(ctx context.Context, path string) error {
 // different working directory.
 func (r *Repo) NewWorktreeRepo(path string) *Repo {
 	return &Repo{
-		url:     r.url,
-		branch:  r.branch,
-		workDir: path,
-		pat:     r.pat,
-		log:     r.log,
+		url:        r.url,
+		branch:     r.branch,
+		workDir:    path,
+		pat:        r.pat,
+		maxRetries: r.maxRetries,
+		log:        r.log,
 	}
 }
