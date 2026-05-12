@@ -92,6 +92,25 @@ func TestClient_Run_BinaryFailure(t *testing.T) {
 	}
 }
 
+func TestClient_Run_BinaryFailure_RefundsBudget(t *testing.T) {
+	binDir := testutil.StubBinDir(t)
+	testutil.WriteStubScript(t, binDir, "claude", `exit 1`)
+
+	c := newStubClient(t, "claude", 30*time.Second)
+	ctx := context.Background()
+
+	before := c.budget.Remaining()
+	_, _, err := c.Run(ctx, t.TempDir(), "will fail")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	after := c.budget.Remaining()
+	if after != before {
+		t.Errorf("budget should be restored after failure: before=$%.2f, after=$%.2f", before, after)
+	}
+}
+
 func TestClient_Run_Timeout(t *testing.T) {
 	binDir := testutil.StubBinDir(t)
 	testutil.WriteStubScript(t, binDir, "claude", `sleep 10`)
@@ -105,6 +124,25 @@ func TestClient_Run_Timeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("error = %v, want to contain 'timed out'", err)
+	}
+}
+
+func TestClient_Run_Timeout_RefundsBudget(t *testing.T) {
+	binDir := testutil.StubBinDir(t)
+	testutil.WriteStubScript(t, binDir, "claude", `sleep 10`)
+
+	c := newStubClient(t, "claude", 500*time.Millisecond)
+	ctx := context.Background()
+
+	before := c.budget.Remaining()
+	_, _, err := c.Run(ctx, t.TempDir(), "slow prompt")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	after := c.budget.Remaining()
+	if after != before {
+		t.Errorf("budget should be restored after timeout: before=$%.2f, after=$%.2f", before, after)
 	}
 }
 

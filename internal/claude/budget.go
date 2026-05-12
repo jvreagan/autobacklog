@@ -50,6 +50,8 @@ func (b *Budget) Record(amount float64) {
 }
 
 // LastCost returns the cost of the most recent invocation.
+// Deprecated: Use the cost returned on the stack from Run/RunPrint instead.
+// This method is not safe for concurrent use across goroutines sharing a Budget.
 func (b *Budget) LastCost() float64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
