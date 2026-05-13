@@ -68,7 +68,7 @@ func (c *Client) buildArgs(prompt string, jsonOutput bool) []string {
 // Run invokes the Claude CLI with the given prompt in the given working directory.
 // Returns the raw output string, the actual cost, and any error.
 func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, float64, error) {
-	reserved := c.cfg.MaxBudgetPerCall
+	reserved := c.cfg.MaxBudgetPerCall * 0.1
 	output, err := c.execute(ctx, workDir, prompt, true, reserved)
 	if err != nil {
 		return "", 0, err
@@ -94,7 +94,7 @@ func (c *Client) Run(ctx context.Context, workDir, prompt string) (string, float
 // RunPrint invokes Claude in print-only mode (no JSON output) for implementation tasks.
 // Returns the output, the recorded cost, and any error.
 func (c *Client) RunPrint(ctx context.Context, workDir, prompt string) (string, float64, error) {
-	reserved := c.cfg.MaxBudgetPerCall
+	reserved := c.cfg.MaxBudgetPerCall * 0.1
 	output, err := c.execute(ctx, workDir, prompt, false, reserved)
 	if err != nil {
 		return "", 0, err

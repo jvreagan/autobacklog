@@ -127,8 +127,8 @@ func TestBuildArgs_IncludesBudget(t *testing.T) {
 
 func TestClient_Run_BudgetExceeded(t *testing.T) {
 	c := newTestClient(false)
-	// Exhaust budget
-	c.budget.Record(49.0)
+	// Exhaust budget — reservation is MaxBudgetPerCall*0.1 = $0.50
+	c.budget.Record(49.60)
 
 	_, _, err := c.Run(context.Background(), "/tmp", "prompt")
 	if err == nil {
@@ -141,7 +141,7 @@ func TestClient_Run_BudgetExceeded(t *testing.T) {
 
 func TestClient_RunPrint_BudgetExceeded(t *testing.T) {
 	c := newTestClient(false)
-	c.budget.Record(49.0)
+	c.budget.Record(49.60)
 
 	_, _, err := c.RunPrint(context.Background(), "/tmp", "prompt")
 	if err == nil {
