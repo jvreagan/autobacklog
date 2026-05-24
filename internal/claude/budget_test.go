@@ -86,30 +86,6 @@ func TestBudget_String(t *testing.T) {
 	}
 }
 
-func TestBudget_LastCost(t *testing.T) {
-	b := NewBudget(100.0)
-
-	if b.LastCost() != 0 {
-		t.Errorf("LastCost() = %f, want 0 before any recording", b.LastCost())
-	}
-
-	b.Record(5.0)
-	if b.LastCost() != 5.0 {
-		t.Errorf("LastCost() = %f, want 5.0", b.LastCost())
-	}
-
-	b.Record(3.0)
-	if b.LastCost() != 3.0 {
-		t.Errorf("LastCost() = %f, want 3.0 (should be most recent)", b.LastCost())
-	}
-
-	// Negative amounts are ignored, LastCost should not change
-	b.Record(-1.0)
-	if b.LastCost() != 3.0 {
-		t.Errorf("LastCost() = %f, want 3.0 (negative should be ignored)", b.LastCost())
-	}
-}
-
 func TestBudget_BurnRate_NoInvocations(t *testing.T) {
 	b := NewBudget(100.0)
 	if rate := b.BurnRate(); rate != 0 {
@@ -237,9 +213,6 @@ func TestBudget_Adjust(t *testing.T) {
 	if b.Spent() != 3.0 {
 		t.Errorf("Spent() = %f, want 3.0", b.Spent())
 	}
-	if b.LastCost() != 3.0 {
-		t.Errorf("LastCost() = %f, want 3.0", b.LastCost())
-	}
 	if b.Invocations() != 1 {
 		t.Errorf("Invocations() = %d, want 1", b.Invocations())
 	}
@@ -249,9 +222,6 @@ func TestBudget_Adjust(t *testing.T) {
 	b.Adjust(10.0, -5.0)
 	if b.Spent() != 3.0 {
 		t.Errorf("Spent() = %f, want 3.0 after negative actual", b.Spent())
-	}
-	if b.LastCost() != 0 {
-		t.Errorf("LastCost() = %f, want 0 after negative actual", b.LastCost())
 	}
 	if b.Invocations() != 2 {
 		t.Errorf("Invocations() = %d, want 2", b.Invocations())

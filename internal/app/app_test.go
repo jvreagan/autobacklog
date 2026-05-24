@@ -163,12 +163,15 @@ func (m *mockTestRunner) Run(_ context.Context, _, _ string, _ []string) (*runne
 type mockPRCreator struct {
 	prURL            string
 	createPRErr      error
+	findExistingURL  string
+	findExistingErr  error
 	autoMergeErr     error
 	checkPRState     gh.PRState
 	checkPRErr       error
 	fetchReviewsResult *gh.PRReviewsResult
 	fetchReviewsErr    error
 	createPRCalls    int
+	findExistingCalls int
 	autoMergeCalls   int
 	checkPRCalls     int
 	fetchReviewsCalls int
@@ -177,6 +180,11 @@ type mockPRCreator struct {
 func (m *mockPRCreator) CreatePR(_ context.Context, _ string, _ gh.PRRequest) (string, error) {
 	m.createPRCalls++
 	return m.prURL, m.createPRErr
+}
+
+func (m *mockPRCreator) FindExistingPR(_ context.Context, _, _ string) (string, error) {
+	m.findExistingCalls++
+	return m.findExistingURL, m.findExistingErr
 }
 
 func (m *mockPRCreator) EnableAutoMerge(_ context.Context, _, _ string) error {
@@ -1034,6 +1042,38 @@ func TestImplementItem_CreatePRError(t *testing.T) {
 	err := a.implementItem(ctx, item, stats)
 	if err == nil {
 		t.Fatal("expected PR creation error")
+	}
+}
+
+func TestImplementItem_CreatePRError_FallbackToExisting(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Testing.OverrideCommand = "go test ./..."
+	ctx := context.Background()
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.createPRErr = errors.New("PR already exists")
+	pr.findExistingURL = "https://github.com/test/repo/pull/42"
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented"}
+	tr := a.runner.(*mockTestRunner)
+	tr.results = []*runner.Result{{Passed: true, Output: "ok"}}
+
+	item := backlog.NewItem("Fix", "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+	a.store.Insert(ctx, item)
+
+	stats := &CycleStats{}
+	if err := a.implementItem(ctx, item, stats); err != nil {
+		t.Fatalf("expected fallback to succeed, got: %v", err)
+	}
+	if pr.findExistingCalls != 1 {
+		t.Errorf("findExistingCalls = %d, want 1", pr.findExistingCalls)
+	}
+	if item.PRLink != "https://github.com/test/repo/pull/42" {
+		t.Errorf("PRLink = %q, want existing PR URL", item.PRLink)
+	}
+	if item.Status != backlog.StatusDone {
+		t.Errorf("Status = %v, want Done", item.Status)
 	}
 }
 
@@ -2060,6 +2100,10 @@ func (p *prBodyCapture) CreatePR(ctx context.Context, workDir string, req gh.PRR
 	return p.inner.CreatePR(ctx, workDir, req)
 }
 
+func (p *prBodyCapture) FindExistingPR(ctx context.Context, workDir string, headBranch string) (string, error) {
+	return p.inner.FindExistingPR(ctx, workDir, headBranch)
+}
+
 func (p *prBodyCapture) EnableAutoMerge(ctx context.Context, workDir string, prURL string) error {
 	return p.inner.EnableAutoMerge(ctx, workDir, prURL)
 }
@@ -2795,6 +2839,53 @@ func TestDoImplementBatch_FullFlow(t *testing.T) {
 		}
 		if got.PRLink != "https://github.com/test/repo/pull/99" {
 			t.Errorf("item %s PRLink = %q, want PR URL", item.Title, got.PRLink)
+		}
+	}
+}
+
+func TestDoImplementBatch_CreatePRError_FallbackToExisting(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.Backlog.BatchImplement = true
+	ctx := context.Background()
+
+	repo := a.repo.(*mockRepo)
+	repo.hasChangesVal = true
+
+	ai := a.claude.(*mockAIClient)
+	ai.runPrintOutputs = []string{"implemented all items"}
+
+	pr := a.prCreator.(*mockPRCreator)
+	pr.createPRErr = errors.New("PR already exists")
+	pr.findExistingURL = "https://github.com/test/repo/pull/77"
+
+	var items []*backlog.Item
+	for i := 0; i < 2; i++ {
+		item := backlog.NewItem(fmt.Sprintf("batch-item-%d", i), "desc", "f.go", backlog.PriorityHigh, backlog.CategoryBug)
+		item.RepoURL = a.cfg.Repo.URL
+		if err := a.store.Insert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	a.selectedItems = items
+
+	stats := &CycleStats{}
+	if err := a.doImplement(ctx, stats); err != nil {
+		t.Fatalf("expected fallback to succeed, got: %v", err)
+	}
+	if pr.findExistingCalls != 1 {
+		t.Errorf("findExistingCalls = %d, want 1", pr.findExistingCalls)
+	}
+	for _, item := range items {
+		got, err := a.store.Get(ctx, item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != backlog.StatusDone {
+			t.Errorf("item %s status = %s, want done", item.Title, got.Status)
+		}
+		if got.PRLink != "https://github.com/test/repo/pull/77" {
+			t.Errorf("item %s PRLink = %q, want existing PR URL", item.Title, got.PRLink)
 		}
 	}
 }

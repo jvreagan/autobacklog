@@ -37,6 +37,25 @@ func CreatePR(ctx context.Context, workDir string, req PRRequest, log *slog.Logg
 	return prURL, nil
 }
 
+// FindExistingPR checks for an open PR on the given head branch.
+// Returns the PR URL if one exists, or empty string if none found.
+func FindExistingPR(ctx context.Context, workDir, headBranch string, log *slog.Logger) (string, error) {
+	out, err := runGH(ctx, workDir, log, "pr", "list", "--head", headBranch, "--state", "open", "--json", "url", "--limit", "1")
+	if err != nil {
+		return "", err
+	}
+	var prs []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return "", fmt.Errorf("parsing pr list output: %w", err)
+	}
+	if len(prs) == 0 {
+		return "", nil
+	}
+	return prs[0].URL, nil
+}
+
 // EnableAutoMerge enables GitHub auto-merge on a PR using `gh pr merge --squash --auto`.
 // This tells GitHub to merge the PR automatically once all required checks pass.
 func EnableAutoMerge(ctx context.Context, workDir string, prURL string, log *slog.Logger) error {

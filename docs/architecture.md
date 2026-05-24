@@ -34,7 +34,7 @@ CLONE → IMPORT_ISSUES → REVIEW → INGEST → EVALUATE_THRESHOLD → IMPLEME
 4. Runs tests with retry loop (auto-detect or override command)
 5. On test failure, asks Claude to fix (up to `max_retries` attempts); if still failing, reverts and marks failed
 6. Stages, commits, pushes
-7. Creates a PR via `gh pr create` (includes `Fixes #N` when the item has a linked issue)
+7. Creates a PR via `gh pr create` (includes `Fixes #N` when the item has a linked issue); if creation fails but an open PR already exists on the branch (lost-response scenario), reuses the existing PR
 8. Optionally enables auto-merge via `gh pr merge --squash --auto`
 9. Updates item status and PR link
 10. Cleans up feature branch on both success (after PR) and failure (claude error, no changes, test failure)

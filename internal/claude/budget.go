@@ -11,7 +11,6 @@ type Budget struct {
 	mu            sync.Mutex
 	maxTotal      float64
 	spent         float64
-	lastCost      float64
 	invocations   int
 	firstRecordAt time.Time
 	now           func() time.Time
@@ -45,17 +44,7 @@ func (b *Budget) Record(amount float64) {
 		b.firstRecordAt = b.now()
 	}
 	b.spent += amount
-	b.lastCost = amount
 	b.invocations++
-}
-
-// LastCost returns the cost of the most recent invocation.
-// Deprecated: Use the cost returned on the stack from Run/RunPrint instead.
-// This method is not safe for concurrent use across goroutines sharing a Budget.
-func (b *Budget) LastCost() float64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.lastCost
 }
 
 // Remaining returns the remaining budget.
@@ -128,7 +117,7 @@ func (b *Budget) Refund(amount float64) {
 }
 
 // Adjust corrects the budget after an invocation completes.
-// It adjusts spent by (actual - reserved), sets lastCost, and increments invocations.
+// It adjusts spent by (actual - reserved) and increments invocations.
 func (b *Budget) Adjust(reserved, actual float64) {
 	if actual < 0 {
 		actual = 0
@@ -139,7 +128,6 @@ func (b *Budget) Adjust(reserved, actual float64) {
 	if b.spent < 0 {
 		b.spent = 0
 	}
-	b.lastCost = actual
 	if b.invocations == 0 {
 		b.firstRecordAt = b.now()
 	}

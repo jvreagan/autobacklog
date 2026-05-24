@@ -55,6 +55,10 @@ func (d *defaultPRCreator) CreatePR(ctx context.Context, workDir string, req gh.
 	return gh.CreatePR(ctx, workDir, req, d.log)
 }
 
+func (d *defaultPRCreator) FindExistingPR(ctx context.Context, workDir string, headBranch string) (string, error) {
+	return gh.FindExistingPR(ctx, workDir, headBranch, d.log)
+}
+
 func (d *defaultPRCreator) EnableAutoMerge(ctx context.Context, workDir string, prURL string) error {
 	return gh.EnableAutoMerge(ctx, workDir, prURL, d.log)
 }
@@ -1059,11 +1063,16 @@ func (a *App) doImplementBatch(ctx context.Context, stats *CycleStats) error {
 		HeadBranch: branchName,
 	})
 	if err != nil {
-		a.cleanupBranch(ctx, branchName)
-		for _, item := range items {
-			a.resetItemStatus(ctx, item, backlog.StatusPending)
+		if existing, findErr := a.prCreator.FindExistingPR(ctx, a.repo.WorkDir(), branchName); findErr == nil && existing != "" {
+			a.log.Info("found existing PR for branch", "branch", branchName, "pr_url", existing)
+			prURL = existing
+		} else {
+			a.cleanupBranch(ctx, branchName)
+			for _, item := range items {
+				a.resetItemStatus(ctx, item, backlog.StatusPending)
+			}
+			return fmt.Errorf("creating batch PR: %w", err)
 		}
-		return fmt.Errorf("creating batch PR: %w", err)
 	}
 
 	a.log.Info("batch pull request created", "pr_url", prURL, "items", len(items))
@@ -1349,9 +1358,14 @@ func (a *App) implementItem(ctx context.Context, item *backlog.Item, stats *Cycl
 		HeadBranch: branchName,
 	})
 	if err != nil {
-		a.cleanupBranch(ctx, branchName)
-		a.resetItemStatus(ctx, item, backlog.StatusPending)
-		return fmt.Errorf("creating PR: %w", err)
+		if existing, findErr := a.prCreator.FindExistingPR(ctx, a.repo.WorkDir(), branchName); findErr == nil && existing != "" {
+			a.log.Info("found existing PR for branch", "branch", branchName, "pr_url", existing)
+			prURL = existing
+		} else {
+			a.cleanupBranch(ctx, branchName)
+			a.resetItemStatus(ctx, item, backlog.StatusPending)
+			return fmt.Errorf("creating PR: %w", err)
+		}
 	}
 
 	a.log.Info("pull request created", "pr_url", prURL, "title", item.Title)

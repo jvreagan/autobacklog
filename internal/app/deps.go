@@ -37,6 +37,7 @@ type TestRunner interface {
 // PRCreator abstracts GitHub PR operations for testability.
 type PRCreator interface {
 	CreatePR(ctx context.Context, workDir string, req gh.PRRequest) (string, error)
+	FindExistingPR(ctx context.Context, workDir string, headBranch string) (string, error)
 	EnableAutoMerge(ctx context.Context, workDir string, prURL string) error
 	CheckPRStatus(ctx context.Context, workDir string, prURL string) (*gh.PRStatusResult, error)
 	FetchPRReviews(ctx context.Context, workDir string, prURL string) (*gh.PRReviewsResult, error)
